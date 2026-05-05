@@ -1,0 +1,15 @@
+build/
+build-*/
+*.pyc
+__pycache__/
+*.so
+*.o
+*.a
+.vscode/
+.idea/
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+Makefile
+_deps/
+compile_commands.json
