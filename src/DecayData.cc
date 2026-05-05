@@ -37,30 +37,58 @@ bool changesZA(DecayMode m) {
     return m != DecayMode::IT;
 }
 
-// Map the integer mode code from the file into our enum.
-// The codes match G4RadioactiveDecayMode in Geant4.
-static DecayMode modeFromInt(int v) {
-    switch (v) {
-        case 0:  return DecayMode::IT;
-        case 1:  return DecayMode::BetaMinus;
-        case 2:  return DecayMode::BetaPlus;
-        case 3:  return DecayMode::KshellEC;
-        case 4:  return DecayMode::LshellEC;
-        case 5:  return DecayMode::MshellEC;
-        case 6:  return DecayMode::NshellEC;
-        case 7:  return DecayMode::Alpha;
-        case 8:  return DecayMode::Proton;
-        case 9:  return DecayMode::Neutron;
-        case 10: return DecayMode::SpFission;
-        case 11: return DecayMode::BDProton;
-        case 12: return DecayMode::BDNeutron;
-        case 13: return DecayMode::Beta2Minus;
-        case 14: return DecayMode::Beta2Plus;
-        case 15: return DecayMode::Proton2;
-        case 16: return DecayMode::Neutron2;
-        case 17: return DecayMode::Triton;
-        default: return DecayMode::Unknown;
-    }
+// Map the decay-mode field from the file into our enum. The field is stored
+// as a string ("BetaMinus", "Alpha", "MshellEC", "IT", "SpFission", ...) per
+// the operator>> in G4RadioactiveDecayMode.cc. Older releases used integer
+// codes; we try int parsing as a fallback for compatibility.
+static DecayMode modeFromStr(const std::string& s) {
+    if (s == "IT")         return DecayMode::IT;
+    if (s == "BetaMinus")  return DecayMode::BetaMinus;
+    if (s == "BetaPlus")   return DecayMode::BetaPlus;
+    if (s == "KshellEC")   return DecayMode::KshellEC;
+    if (s == "LshellEC")   return DecayMode::LshellEC;
+    if (s == "MshellEC")   return DecayMode::MshellEC;
+    if (s == "NshellEC")   return DecayMode::NshellEC;
+    if (s == "Alpha")      return DecayMode::Alpha;
+    if (s == "Proton")     return DecayMode::Proton;
+    if (s == "Neutron")    return DecayMode::Neutron;
+    if (s == "SpFission")  return DecayMode::SpFission;
+    if (s == "BDProton")   return DecayMode::BDProton;
+    if (s == "BDNeutron")  return DecayMode::BDNeutron;
+    if (s == "Beta2Minus") return DecayMode::Beta2Minus;
+    if (s == "Beta2Plus")  return DecayMode::Beta2Plus;
+    if (s == "Proton2")    return DecayMode::Proton2;
+    if (s == "Neutron2")   return DecayMode::Neutron2;
+    if (s == "Triton")     return DecayMode::Triton;
+    // Integer fallback for older datasets
+    try {
+        size_t pos;
+        int v = std::stoi(s, &pos);
+        if (pos == s.size()) {
+            switch (v) {
+                case 0:  return DecayMode::IT;
+                case 1:  return DecayMode::BetaMinus;
+                case 2:  return DecayMode::BetaPlus;
+                case 3:  return DecayMode::KshellEC;
+                case 4:  return DecayMode::LshellEC;
+                case 5:  return DecayMode::MshellEC;
+                case 6:  return DecayMode::NshellEC;
+                case 7:  return DecayMode::Alpha;
+                case 8:  return DecayMode::Proton;
+                case 9:  return DecayMode::Neutron;
+                case 10: return DecayMode::SpFission;
+                case 11: return DecayMode::BDProton;
+                case 12: return DecayMode::BDNeutron;
+                case 13: return DecayMode::Beta2Minus;
+                case 14: return DecayMode::Beta2Plus;
+                case 15: return DecayMode::Proton2;
+                case 16: return DecayMode::Neutron2;
+                case 17: return DecayMode::Triton;
+                default: return DecayMode::Unknown;
+            }
+        }
+    } catch (...) {}
+    return DecayMode::Unknown;
 }
 
 // Determine the (Z',A') of the daughter based on decay mode. Returns true
@@ -187,10 +215,10 @@ const std::vector<DecayParent>* DecayDataLoader::load(int Z, int A) {
         //   - long  (>= 72):      "<modeInt> <a=daughterExcitation_keV>
         //                          <floatFlag> <b=BR%> <c=Q_keV> [betaType]"
         if (line.length() < 72) {
-            int modeInt = -1;
+            std::string modeStr;
             double dummy = 0.0, decayModeTotal = 0.0;
-            ss >> modeInt >> dummy >> decayModeTotal;
-            DecayMode m = modeFromInt(modeInt);
+            ss >> modeStr >> dummy >> decayModeTotal;
+            DecayMode m = modeFromStr(modeStr);
 
             if (m == DecayMode::IT) {
                 // IT shows up only as a short line: insert a single channel.
@@ -210,13 +238,13 @@ const std::vector<DecayParent>* DecayDataLoader::load(int Z, int A) {
             }
         } else {
             // long line: a per-channel record (specific daughter excitation).
-            int modeInt = -1;
+            std::string modeStr;
             double a = 0.0, b = 0.0, c = 0.0;
             std::string daughterFloatFlag;
             // betaType (optional; present only if line >= 84). We don't use it.
-            ss >> modeInt >> a >> daughterFloatFlag >> b >> c;
+            ss >> modeStr >> a >> daughterFloatFlag >> b >> c;
 
-            DecayMode m = modeFromInt(modeInt);
+            DecayMode m = modeFromStr(modeStr);
             if (m == DecayMode::Unknown) continue;
             // a in keV; b in percent; c in keV; per Geant4: a/=1000, c/=1000, b/=100.
             double daughterEx = a * keV;       // already converted via *keV

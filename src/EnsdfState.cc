@@ -70,4 +70,41 @@ double EnsdfStateLoader::meanLife(const IsotopeKey& key, double thresh) {
     return 0.0;
 }
 
+int EnsdfStateLoader::excitationToM(int Z, int A, double exc, double thresh,
+                                     double tol) {
+    const auto* v = load(Z, A);
+    if (!v) return -1;
+    // Walk ENSDFSTATE levels in file order (sorted by excitation). Each level
+    // has an M index: M=0 for the ground state (excitation == 0), M=1, 2, ...
+    // for successive levels with mean life > threshold. Levels below the
+    // threshold are ignored (Geant4 treats them as collapsing to the next-lower
+    // tracked level).
+    int M = 0;
+    bool seenGround = false;
+    int bestM = -1;
+    double bestDiff = std::numeric_limits<double>::infinity();
+    for (const auto& lvl : *v) {
+        // Determine this level's M
+        int thisM;
+        if (lvl.excitation == 0.0 && !seenGround) {
+            thisM = 0;
+            seenGround = true;
+        } else if (lvl.excitation > 0.0 && lvl.meanLife > thresh) {
+            ++M;
+            thisM = M;
+        } else {
+            // Skipped level (excited but lifetime below threshold); still
+            // check for match (for caller's information) but don't track M.
+            thisM = -1;
+        }
+        // Check match
+        double d = std::abs(lvl.excitation - exc);
+        if (d <= tol && d < bestDiff) {
+            bestDiff = d;
+            bestM = (thisM >= 0) ? thisM : 0;
+        }
+    }
+    return bestM;
+}
+
 } // namespace g4gamma

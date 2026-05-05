@@ -7,8 +7,9 @@
 
 namespace g4gamma {
 
-ChainBuilder::ChainBuilder(DecayDataLoader& d, PhotonEvapData& e, double thr)
-    : fDec(d), fEvap(e), fIsomerThreshold(thr) {}
+ChainBuilder::ChainBuilder(DecayDataLoader& d, PhotonEvapData& e,
+                            EnsdfStateLoader* ensdf, double thr)
+    : fDec(d), fEvap(e), fEnsdf(ensdf), fIsomerThreshold(thr) {}
 
 int ChainBuilder::indexOf(const IsotopeKey& k) const {
     auto it = fIndex.find(k);
@@ -21,17 +22,66 @@ int ChainBuilder::addNode(const IsotopeKey& key) {
     ChainNode n;
     n.isotope = key;
     n.index   = static_cast<int>(fNodes.size());
-    if (const auto* dp = fDec.get(key)) {
+    const DecayParent* dp = parentFor(key);
+    if (dp) {
         n.meanLife = dp->meanLife;
         n.stable   = dp->isStable;
     } else {
-        // No decay data file -> treat as stable.
         n.meanLife = 0.0;
         n.stable   = true;
     }
     fNodes.push_back(std::move(n));
     fIndex[key] = fNodes.back().index;
     return fNodes.back().index;
+}
+
+const DecayParent* ChainBuilder::parentFor(const IsotopeKey& key) {
+    const auto* parents = fDec.load(key.Z, key.A);
+    if (!parents || parents->empty()) return nullptr;
+
+    // Determine the target excitation for this M from ENSDFSTATE if available.
+    double targetExc = -1.0;
+    if (fEnsdf) {
+        const auto* lvls = fEnsdf->load(key.Z, key.A);
+        if (lvls) {
+            int M = 0;
+            bool seenGround = false;
+            for (const auto& lvl : *lvls) {
+                int thisM;
+                if (lvl.excitation == 0.0 && !seenGround) {
+                    thisM = 0;
+                    seenGround = true;
+                } else if (lvl.excitation > 0.0 && lvl.meanLife > fIsomerThreshold) {
+                    ++M;
+                    thisM = M;
+                } else {
+                    thisM = -1;
+                }
+                if (thisM == key.M) {
+                    targetExc = lvl.excitation;
+                    break;
+                }
+            }
+        }
+    }
+
+    if (targetExc >= 0.0) {
+        // Find the P block whose excitation matches targetExc.
+        const DecayParent* best = nullptr;
+        double bestDiff = std::numeric_limits<double>::infinity();
+        for (const auto& p : *parents) {
+            double diff = std::abs(p.parentExcitation - targetExc);
+            if (diff < bestDiff) { bestDiff = diff; best = &p; }
+        }
+        if (bestDiff > 1.0 * units::keV) return nullptr;
+        return best;
+    }
+
+    // No ENSDFSTATE info -- fall back to file-order assumption.
+    if (key.M >= 0 && key.M < static_cast<int>(parents->size())) {
+        return &(*parents)[key.M];
+    }
+    return nullptr;
 }
 
 bool ChainBuilder::resolveDaughter(const DecayChannel& ch, IsotopeKey& outKey) {
@@ -47,43 +97,23 @@ bool ChainBuilder::resolveDaughter(const DecayChannel& ch, IsotopeKey& outKey) {
         return true;
     }
 
-    // Decide which M-block of the daughter (Z',A') corresponds to this
-    // excitation. Strategy: if the daughter's decay-data has multiple parent
-    // blocks (M=0, M=1, ...), match by parentExcitation closest to exc.
-    // If no match within tolerance, default to M=0.
+    // Use ENSDFSTATE if available.
     int M = 0;
-    if (const auto* parents = fDec.load(Zp, Ap)) {
-        if (!parents->empty()) {
-            // First, find the candidate block with parentExcitation closest to exc.
-            double bestDiff = std::numeric_limits<double>::infinity();
-            int    bestM    = 0;
-            for (size_t i = 0; i < parents->size(); ++i) {
-                double d = std::abs((*parents)[i].parentExcitation - exc);
-                if (d < bestDiff) { bestDiff = d; bestM = static_cast<int>(i); }
-            }
-            // Accept M >= 1 only if (a) it's actually an excited block, and
-            // (b) the match is reasonably close. The Geant4 levelTolerance is
-            // O(1 eV), but daughterExcitation in the decay file is rounded to
-            // keV, so use a tolerance of 1 keV.
-            if (bestM > 0 && bestDiff < 1.0 * units::keV) {
-                M = bestM;
-            } else {
-                // The daughter excitation might land on an isomeric level even
-                // if we'd otherwise go to M=0. Cross-check via PhotonEvap +
-                // mean-life threshold.
-                int li = fEvap.findLevel(Zp, Ap, exc, 1.0 * units::keV);
-                if (li > 0) {
-                    if (const auto* lvls = fEvap.load(Zp, Ap)) {
-                        double t = (*lvls)[li].meanLifeTime;
-                        if (t > fIsomerThreshold) {
-                            // Long-lived excited state => treat as isomer if
-                            // there is a matching decay-data block.
-                            // Without one, leave as M=0 (Geant4 falls back to
-                            // pure IT cascade in that case).
-                            M = bestM; // best effort
-                        }
-                    }
+    if (fEnsdf) {
+        int m = fEnsdf->excitationToM(Zp, Ap, exc, fIsomerThreshold,
+                                       1.0 * units::keV);
+        if (m >= 0) M = m;
+    } else {
+        // Fall back to file-order match in the daughter's decay file.
+        if (const auto* parents = fDec.load(Zp, Ap)) {
+            if (!parents->empty()) {
+                double bestDiff = std::numeric_limits<double>::infinity();
+                int    bestM    = 0;
+                for (size_t i = 0; i < parents->size(); ++i) {
+                    double d = std::abs((*parents)[i].parentExcitation - exc);
+                    if (d < bestDiff) { bestDiff = d; bestM = static_cast<int>(i); }
                 }
+                if (bestM > 0 && bestDiff < 1.0 * units::keV) M = bestM;
             }
         }
     }
@@ -110,7 +140,7 @@ void ChainBuilder::build(const IsotopeKey& root, int maxDepth) {
         ChainNode& n = fNodes[idx];
         if (n.stable) continue;
 
-        const DecayParent* dp = fDec.get(n.isotope);
+        const DecayParent* dp = parentFor(n.isotope);
         if (!dp) { n.stable = true; continue; }
 
         for (size_t ci = 0; ci < dp->channels.size(); ++ci) {

@@ -26,7 +26,42 @@ def write_test_data():
     for d in (RAD, EVAP, FLUOR):
         os.makedirs(d, exist_ok=True)
 
-    # ---- Cs-137 -----------------------------------------------------------
+    # ---- Cs-137 in REAL Geant4 format (string mode names, no daughter
+    # ---- ground-state P block in Ba-137 file) -----------------------------
+    # Uses subdir /real to avoid clobbering the integer-mode test data.
+    real_rad = f"{TESTDATA}/RealRad"
+    real_evap = f"{TESTDATA}/RealEvap"
+    real_ensdf = f"{TESTDATA}/RealEnsdf"
+    for d in (real_rad, real_evap, real_ensdf):
+        os.makedirs(d, exist_ok=True)
+    open(f"{real_rad}/z55.a137", "w").write("""\
+# 137CS ( 30.08 Y   )
+#  Excitation  flag   Halflife  Mode    Daughter Ex flag   Intensity          Q
+P            0  - 9.492526e+08
+                              BetaMinus            0               1
+                              BetaMinus            0  -          5.3      1175.63
+                              BetaMinus      661.659  -         94.7       513.97
+""")
+    open(f"{real_rad}/z56.a137", "w").write("""\
+# 137BA ( 2.552 M   )
+P      661.659  -       153.12
+                                     IT            0               1
+""")
+    open(f"{real_evap}/z55.a137", "w").write("0  -\n0.0  0.0  3.5  0\n")
+    open(f"{real_evap}/z56.a137", "w").write("""\
+0  -
+0.0  0.0  1.5  0
+1  -
+661.659  2.209e+11  5.5  1
+0  661.659  1.0  4  0.0  0.111  0.0913  0.0151  0.000756  0.000746  0.00154  0.000292  0.000295  0.0  0.0  0.0
+""")
+    open(f"{real_ensdf}/ENSDFSTATE.dat", "w").write("""\
+55 137 0.0       -    1.369e+18  7  0.0
+56 137 0.0       -    -1.0       3  0.0
+56 137 661.659   -    2.209e+11  11  0.0
+""")
+
+    # ---- Cs-137 (legacy integer-mode synthetic data) ---------------------
     open(f"{RAD}/z55.a137", "w").write("""\
 P                  0.0       -      9.491e+08
                    1               0.000               1.000
@@ -190,6 +225,19 @@ def main():
     res = builder.build(g.IsotopeKey(55, 137, 0), -1.0, edges2)
     Test.check("counts sum (peak at 661 keV outside [200,500])",
                np.array(res.counts).sum(), 0.0, tol=1e-9)
+
+    # ----- Real Geant4 format (string modes, no daughter ground P block) --
+    print("\n[8] Cs-137 in real Geant4 file format (with ENSDFSTATE)")
+    os.environ["G4RADIOACTIVEDATA"]  = f"{TESTDATA}/RealRad"
+    os.environ["G4LEVELGAMMADATA"]   = f"{TESTDATA}/RealEvap"
+    os.environ["G4ENSDFSTATEDATA"]   = f"{TESTDATA}/RealEnsdf"
+    res = g.GammaSpectrumBuilder(g.SpectrumOptions()).build(
+        g.IsotopeKey(55, 137, 0), -1.0, edges_keV * g.units.keV)
+    counts = np.array(res.counts)
+    Test.check("661 keV peak (real format)", counts[661], 0.947 * (1.0 / 1.111))
+    # Check the chain found Ba-137m (M=1)
+    has_ba137m = any(c.isotope.M == 1 and c.isotope.Z == 56 for c in res.contributions)
+    Test.check("Ba-137m found in chain (real format)", float(has_ba137m), 1.0)
 
     print(f"\n--- {Test.passed} passed, {Test.failed} failed ---")
     sys.exit(0 if Test.failed == 0 else 1)

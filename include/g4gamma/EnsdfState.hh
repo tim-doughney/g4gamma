@@ -36,6 +36,12 @@ public:
     // etc. Returns 0 if not found (callers should treat as unknown / stable).
     double meanLife(const IsotopeKey& key, double meanLifeThreshold);
 
+    // Map an excitation energy (internal units) to an isomer index M for
+    // (Z, A). M=0 = ground state. M>=1 = successive isomers above the
+    // lifetime threshold. Returns -1 if no match.
+    int excitationToM(int Z, int A, double excitation, double thresh,
+                      double tolerance);
+
     bool ready() {
         if (!fLoadAttempted) loadAll();
         return fLoaded;

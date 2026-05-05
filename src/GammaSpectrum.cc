@@ -148,17 +148,19 @@ SpectrumResult GammaSpectrumBuilder::build(const IsotopeKey& primary,
     }
 
     // Build chain
-    ChainBuilder cb(decay, evap, fOpts.isomerLifetimeThresh);
+    ChainBuilder cb(decay, evap, ensdf.ready() ? &ensdf : nullptr,
+                    fOpts.isomerLifetimeThresh);
     cb.build(primary, fOpts.maxChainDepth);
     auto& chainMutable = const_cast<std::vector<ChainNode>&>(cb.nodes());
 
-    // Patch in mean lives from ENSDFSTATE if available. The half-life column
-    // in the RadioactiveDecay zZ.aA file is a placeholder/dummy and using it
-    // for finite-time Bateman gives wrong answers (often A=0 across the
-    // board). ENSDFSTATE.dat is the canonical source.
+    // Patch in mean lives from ENSDFSTATE (now redundant since ChainBuilder
+    // already does the lookup via ENSDFSTATE if available, but kept here as
+    // a defence-in-depth fallback for nodes that ChainBuilder couldn't
+    // resolve).
     if (ensdf.ready()) {
         for (auto& n : chainMutable) {
             if (n.stable) continue;
+            if (n.meanLife > 0.0) continue;
             double ml = ensdf.meanLife(n.isotope, fOpts.isomerLifetimeThresh);
             if (ml > 0.0) n.meanLife = ml;
         }
@@ -177,7 +179,7 @@ SpectrumResult GammaSpectrumBuilder::build(const IsotopeKey& primary,
         }
         // Warn about isotopes with no decay file
         for (const auto& n : chain) {
-            const DecayParent* dp = decay.get(n.isotope);
+            const DecayParent* dp = cb.parentFor(n.isotope);
             if (!dp && !n.stable) {
                 std::cerr << "[g4gamma] WARNING: " << n.isotope.str()
                           << " not stable but no decay-data file found at "
@@ -194,7 +196,7 @@ SpectrumResult GammaSpectrumBuilder::build(const IsotopeKey& primary,
     // Sanity check on the root: if it has no decay channels, the result will
     // be all zero and that's almost certainly not what the user wants.
     if (!chain.empty()) {
-        const DecayParent* rootDp = decay.get(chain[0].isotope);
+        const DecayParent* rootDp = cb.parentFor(chain[0].isotope);
         if (!rootDp || rootDp->channels.empty()) {
             std::cerr << "[g4gamma] WARNING: primary " << primary.str()
                       << " has no decay channels -- output will be zero.\n"
@@ -234,7 +236,7 @@ SpectrumResult GammaSpectrumBuilder::build(const IsotopeKey& primary,
             out.contributions.push_back(cc);
             continue;
         }
-        const DecayParent* dp = decay.get(node.isotope);
+        const DecayParent* dp = cb.parentFor(node.isotope);
         if (!dp) {
             out.contributions.push_back(cc);
             continue;

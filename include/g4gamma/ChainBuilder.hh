@@ -25,6 +25,7 @@
 #include "g4gamma/IsotopeKey.hh"
 #include "g4gamma/DecayData.hh"
 #include "g4gamma/PhotonEvap.hh"
+#include "g4gamma/EnsdfState.hh"
 #include <vector>
 #include <unordered_map>
 
@@ -53,7 +54,10 @@ struct ChainNode {
 
 class ChainBuilder {
 public:
+    // ensdf may be nullptr; when non-null, it is used to assign isomer M
+    // indices consistently with the ENSDFSTATE convention.
     ChainBuilder(DecayDataLoader& dec, PhotonEvapData& evap,
+                 EnsdfStateLoader* ensdf,
                  double isomerLifetimeThreshold /* internal units, e.g. 1*ns */);
 
     // Build the chain rooted at `root`. Returns the ordered chain (root first).
@@ -67,9 +71,10 @@ public:
     int indexOf(const IsotopeKey& k) const;
 
 private:
-    DecayDataLoader& fDec;
-    PhotonEvapData&  fEvap;
-    double           fIsomerThreshold;
+    DecayDataLoader&  fDec;
+    PhotonEvapData&   fEvap;
+    EnsdfStateLoader* fEnsdf;     // may be null
+    double            fIsomerThreshold;
     std::vector<ChainNode> fNodes;
     std::unordered_map<IsotopeKey, int> fIndex;
 
@@ -79,6 +84,13 @@ private:
 
     // Get-or-add a node for `key`, returning its index in fNodes.
     int addNode(const IsotopeKey& key);
+
+public:
+    // Find the DecayParent block for an IsotopeKey, accounting for the
+    // possibility that the file has no ground-state P block (so M->index
+    // mapping is not just identity). Uses ENSDFSTATE when available.
+    // Returns nullptr if not found.
+    const DecayParent* parentFor(const IsotopeKey& key);
 };
 
 } // namespace g4gamma

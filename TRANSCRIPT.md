@@ -182,13 +182,58 @@ Synthetic test data files were constructed for:
 - **Synthetic U-238 mini-chain** with branched topology (Pa-234m IT to
   Pa-234 in addition to its main β- branch) to exercise the branched-chain
   Bateman.
+- **Cs-137 in real Geant4 file format** added after first round of testing
+  on the user's actual install — see "Real-data debugging" below.
 
 All synthetic-data tests pass to 6+ decimal places. Bin-edge cases tested:
 out-of-range peaks (no spurious counts), log binning, fine binning,
 non-uniform bins.
 
-Real-data validation against rdecay01 outputs is left for the user to run
-on their HPC system using the included `test/validate_against_rdecay01.py`.
+---
+
+## Real-data debugging
+
+After getting `make && python test/run_tests.py` to pass on the test rig, the
+user ran the diagnostic against their real `RadioactiveDecay6.1.2` install
+and got all-zero output. Several issues surfaced:
+
+1. **String mode names, not integer codes.** The actual Geant4 11.3.0
+   `RadioactiveDecay6.1.2` files use string mode names (`"BetaMinus"`,
+   `"Alpha"`, `"MshellEC"`, `"IT"`, `"SpFission"`, etc.) in the decay
+   channel records, not integer codes as I'd assumed from older versions.
+   Geant4's parser uses an `operator>>` overload defined on
+   `G4RadioactiveDecayMode` which dispatches on the string. Fixed by
+   replacing `modeFromInt` with `modeFromStr` (with integer fallback for
+   backward compatibility).
+
+2. **Daughter file with no ground-state P block.** The Ba-137 file in real
+   Geant4 has only `P 661.659 ... IT` (the metastable). There is no
+   `P 0 ... ` block for the stable ground state. This breaks the file-order
+   M assumption (`parents[0]` would be Ba-137m, not Ba-137 ground), so when
+   ChainBuilder asked for `IsotopeKey(56, 137, M=1)` it found no match.
+
+3. **Half-life column in the parent line is a placeholder.** Confirmed in
+   real data: most parent lines have a number that looks like a half-life
+   in seconds but Geant4 actually reads the canonical mean lives from
+   `ENSDFSTATE.dat`. (As it happens, the values in the rad files are often
+   correct, but this is not guaranteed and the parser does not depend on
+   them.)
+
+The fix for (2) and (3) was to make `ChainBuilder` ENSDFSTATE-aware:
+
+- M assignment for daughters uses `EnsdfStateLoader::excitationToM()`,
+  which walks the ENSDFSTATE level list for the daughter element and
+  returns the M index (M=0 for ground, M=1 for first level above the
+  user-configured lifetime threshold, etc.).
+- When looking up the decay-data parent block for an `IsotopeKey(Z,A,M)`,
+  we first ask ENSDFSTATE for the excitation corresponding to that M, then
+  match it to the closest `P`-block in the rad file (within 1 keV).
+  This correctly handles missing-ground-state files like Ba-137.
+- Mean lives are pulled from ENSDFSTATE (canonical) rather than from the
+  rad-file half-life column (placeholder).
+
+Final test suite: 13/13 passing, including a regression test using the
+real Geant4 file format and ENSDFSTATE.
 
 ---
 
@@ -234,7 +279,7 @@ test/validate_against_rdecay01.py   compare against existing rdecay01 CSVs
 
 ---
 
-## Test results (final, all 11 passing)
+## Test results (final, all 13 passing)
 
 ```
 [1] Cs-137 SE             OK  661 keV peak: 0.852385 = 0.947 × (1/1.111)
@@ -244,9 +289,12 @@ test/validate_against_rdecay01.py   compare against existing rdecay01 CSVs
 [5] Na-22 with B+         OK  511 keV: 1.8072 = 2 × 0.9036
 [6] Na-22 no annihilation OK  511 peak suppressed cleanly
 [7] Out-of-range bins     OK  no spurious counts
+[8] Cs-137 real format    OK  661 keV peak with ENSDFSTATE-driven M assignment
+[8b] Real format chain    OK  Ba-137m identified as M=1 isomer
 
 Plus interactive validation:
 - Synthetic U-238 mini-chain (branched topology with Pa-234m IT to Pa-234)
 - geant4.sh parsing with commented-out per-dataset env vars
 - ENSDFSTATE patching of placeholder half-lives in real Geant4 files
+- String mode-name parsing with integer fallback for older datasets
 ```
