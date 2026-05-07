@@ -60,6 +60,41 @@ os.makedirs(OUTDIR, exist_ok=True)
 print(f"Writing plots to: {os.path.abspath(OUTDIR)}\n")
 
 
+# ----------- detect available data sources --------------------------------
+SOURCES = {"geant4": True}
+# SandiaDecay XML location (auto-detect, allow override via env)
+SANDIA_XML = os.environ.get("SANDIA_DECAY_XML", "")
+if not SANDIA_XML:
+    for cand in [
+        os.path.join(HERE, "..", "data", "sandia", "sandia.decay.nocoinc.min.xml.gz"),
+        os.path.join(HERE, "..", "data", "sandia", "sandia.decay.nocoinc.min.xml"),
+        os.path.join(HERE, "..", "data", "sandia", "sandia.decay.xml.gz"),
+        os.path.join(HERE, "..", "data", "sandia", "sandia.decay.xml"),
+        os.path.join(HERE, "..", "data", "sandia", "sandia.decay.min.xml"),
+    ]:
+        if os.path.isfile(cand):
+            SANDIA_XML = cand
+            break
+SOURCES["sandia"] = bool(SANDIA_XML)
+
+# LARA data directory
+LARA_DIR = os.environ.get("LARA_DATA_DIR", "")
+if not LARA_DIR:
+    cand = os.path.join(HERE, "..", "data", "lara")
+    if os.path.isdir(cand):
+        has_loose   = any(f.endswith(".lara.txt") for f in os.listdir(cand))
+        has_tarball = (os.path.isfile(os.path.join(cand, "lara.tar.gz")) or
+                       os.path.isfile(os.path.join(cand, "lara.tar")))
+        if has_loose or has_tarball:
+            LARA_DIR = cand
+SOURCES["lara"] = bool(LARA_DIR)
+
+print(f"Available sources: {[s for s, ok in SOURCES.items() if ok]}")
+if SANDIA_XML: print(f"  Sandia XML: {SANDIA_XML}")
+if LARA_DIR:   print(f"  LARA dir:   {LARA_DIR}")
+print()
+
+
 # ----------- plot styling ---------------------------------------------------
 plt.rcParams.update({
     "figure.dpi":         110,
@@ -89,10 +124,21 @@ C = {
 
 
 # ----------- helpers --------------------------------------------------------
-def safe_build(primary, t, edges, **kwargs):
+def safe_build(primary, t, edges, source="geant4", **kwargs):
     """Build a spectrum, returning (counts, contributions) or (None, msg) on failure."""
+    if source == "sandia":
+        src = g.DataSource.Sandia
+    elif source == "lara":
+        src = g.DataSource.Lara
+    else:
+        src = g.DataSource.Geant4
+    extra = {}
+    if source == "sandia" and SANDIA_XML:
+        extra["sandia_xml"] = SANDIA_XML
+    if source == "lara" and LARA_DIR:
+        extra["lara_dir"] = LARA_DIR
     try:
-        res = g.build_spectrum(primary, t, edges, **kwargs)
+        res = g.build_spectrum(primary, t, edges, source=src, **extra, **kwargs)
         return np.array(res.counts), list(res.contributions)
     except Exception as e:
         return None, str(e)
@@ -144,7 +190,12 @@ def style_ax(ax, title=None, xlabel="Energy (keV)", ylabel="γ / primary decay",
 
 def save(fig, name):
     path = os.path.join(OUTDIR, name)
-    fig.tight_layout()
+    # tight_layout() warns on gridspec'd figures; suppress that one warning
+    # rather than restructuring all the figure-building code.
+    import warnings
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)
+        fig.tight_layout()
     fig.savefig(path, bbox_inches="tight")
     plt.close(fig)
     print(f"  -> {name}")
@@ -338,7 +389,13 @@ if ok:
 # ===========================================================================
 print("Fig 6: U-238 full chain at SE")
 
-counts, contrib = safe_build(g.IsotopeKey(92, 238, 0), -1.0, EDGES)
+# Try Geant4 first; if no data, fall back to Sandia (we ship the data).
+counts, contrib = safe_build(g.IsotopeKey(92, 238, 0), -1.0, EDGES, source="geant4")
+src_used = "Geant4"
+if (counts is None or counts.sum() == 0) and SOURCES["sandia"]:
+    counts, contrib = safe_build(g.IsotopeKey(92, 238, 0), -1.0, EDGES, source="sandia")
+    src_used = "SandiaDecay"
+
 if counts is not None and counts.sum() > 0:
     fig = plt.figure(figsize=(11, 6))
     gs = fig.add_gridspec(2, 2, height_ratios=[2, 1.5], hspace=0.45, wspace=0.25)
@@ -348,7 +405,7 @@ if counts is not None and counts.sum() > 0:
 
     plot_spectrum(ax_spec, EDGES_KEV, counts, color=C["primary"])
     ax_spec.set_xlim(0, 3000)
-    style_ax(ax_spec, "U-238 chain at secular equilibrium", ylog=True)
+    style_ax(ax_spec, f"U-238 chain at secular equilibrium  ({src_used})", ylog=True)
     ax_spec.set_ylim(1e-5, max(counts.max()*2, 1))
 
     # Annotate top peaks with isotope guesses
@@ -387,12 +444,17 @@ else:
 # ===========================================================================
 print("Fig 7: Th-232 full chain at SE")
 
-counts, contrib = safe_build(g.IsotopeKey(90, 232, 0), -1.0, EDGES)
+counts, contrib = safe_build(g.IsotopeKey(90, 232, 0), -1.0, EDGES, source="geant4")
+src_used = "Geant4"
+if (counts is None or counts.sum() == 0) and SOURCES["sandia"]:
+    counts, contrib = safe_build(g.IsotopeKey(90, 232, 0), -1.0, EDGES, source="sandia")
+    src_used = "SandiaDecay"
+
 if counts is not None and counts.sum() > 0:
     fig, ax = plt.subplots(figsize=(10, 4.5))
     plot_spectrum(ax, EDGES_KEV, counts, color=C["primary"])
     ax.set_xlim(0, 3000)
-    style_ax(ax, "Th-232 chain at secular equilibrium", ylog=True)
+    style_ax(ax, f"Th-232 chain at secular equilibrium  ({src_used})", ylog=True)
     ax.set_ylim(1e-5, max(counts.max()*2, 1))
     annotate_peaks(ax, EDGES_KEV, counts, max_peaks=10, min_count=1e-3)
 
@@ -527,8 +589,87 @@ else:
 
 
 # ===========================================================================
-# Final summary
+# Fig 11 — Tri-source cross-validation (Geant4 vs Sandia vs LARA)
 # ===========================================================================
+print("Fig 11: Geant4 vs Sandia vs LARA cross-validation")
+
+active_sources = [s for s in ("geant4", "sandia", "lara") if SOURCES[s]]
+if len(active_sources) >= 2:
+    iso_panel = [
+        (g.IsotopeKey(55, 137, 0), "Cs-137",  (0, 800)),
+        (g.IsotopeKey(19,  40, 0), "K-40",    (0, 1700)),
+        (g.IsotopeKey(27,  60, 0), "Co-60",   (0, 1500)),
+        (g.IsotopeKey(92, 238, 0), "U-238",   (0, 3000)),
+    ]
+
+    color_map = {
+        "geant4": C["primary"],
+        "sandia": C["secondary"],
+        "lara":   C["accent"],
+    }
+    label_map = {"geant4": "Geant4", "sandia": "SandiaDecay", "lara": "LARA/DDEP"}
+    style_map = {"geant4": "-", "sandia": "--", "lara": ":"}
+
+    panel_data = []
+    for primary, label, xrange in iso_panel:
+        rows = []
+        for src in active_sources:
+            counts, _ = safe_build(primary, -1.0, EDGES, source=src)
+            if counts is not None and counts.sum() > 0:
+                rows.append((src, counts))
+        if len(rows) >= 2:
+            panel_data.append((primary, label, xrange, rows))
+
+    if panel_data:
+        n = len(panel_data)
+        fig, axes = plt.subplots(n, 1, figsize=(10, 2.6 * n + 0.5), sharex=False)
+        if n == 1: axes = [axes]
+        for ax, (primary, label, xrange, rows) in zip(axes, panel_data):
+            for src, counts in rows:
+                color = color_map[src]
+                fill_alpha = 0.20 if src == "geant4" else 0
+                lk = {"linestyle": style_map[src], "linewidth": 1.2}
+                plot_spectrum(ax, EDGES_KEV, counts,
+                              label=f"{label_map[src]} (Σ={counts.sum():.4f})",
+                              color=color, fill_alpha=fill_alpha, line_kwargs=lk)
+            ax.set_xlim(*xrange)
+            ax.set_yscale("log")
+            ymax = max(c.max() for _, c in rows) * 2
+            ax.set_ylim(1e-5, max(ymax, 1))
+            style_ax(ax, label, ylog=True)
+            ax.legend(loc="upper right", fontsize=8)
+        fig.suptitle(f"Cross-validation: {' vs '.join(label_map[s] for s in active_sources)} — same nuclide, independent ENSDF evaluations",
+                     y=1.00)
+        save(fig, "11_tri_source_cross_validation.png")
+
+        # Residual scatter plot vs Geant4 baseline
+        if "geant4" in active_sources and len(active_sources) >= 2:
+            fig, ax = plt.subplots(figsize=(10, 4))
+            for primary, label, xrange, rows in panel_data:
+                gd = next((c for s, c in rows if s == "geant4"), None)
+                if gd is None or gd.sum() == 0: continue
+                centers = 0.5 * (EDGES_KEV[:-1] + EDGES_KEV[1:])
+                mask = gd > 0.005
+                if mask.sum() == 0: continue
+                for src, counts in rows:
+                    if src == "geant4": continue
+                    frac = (counts - gd) / np.maximum(gd, 1e-12)
+                    marker = "s" if src == "sandia" else "^"
+                    ax.scatter(centers[mask], frac[mask] * 100, s=20,
+                               marker=marker, alpha=0.7,
+                               color=color_map[src],
+                               label=f"{label} vs Geant4 ({label_map[src]})" if label == panel_data[0][1] else None)
+            ax.axhline(0, color=C["muted"], lw=0.5)
+            ax.set_xlim(0, 3000)
+            ax.set_ylim(-5, 5)
+            style_ax(ax, "Fractional differences vs Geant4 baseline (peaks > 0.5%)",
+                     xlabel="Energy (keV)", ylabel="(other − Geant4) / Geant4  (%)")
+            ax.legend(loc="upper right", fontsize=8)
+            save(fig, "11b_cross_validation_residuals.png")
+    else:
+        print("  SKIPPED -- no panel data with multiple sources")
+else:
+    print("  SKIPPED -- need at least 2 sources, only have:", active_sources)
 print(f"\nDone. Plots written to: {os.path.abspath(OUTDIR)}")
 print(f"Files:")
 for f in sorted(os.listdir(OUTDIR)):

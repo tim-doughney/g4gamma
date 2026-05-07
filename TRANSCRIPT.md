@@ -298,3 +298,128 @@ Plus interactive validation:
 - ENSDFSTATE patching of placeholder half-lives in real Geant4 files
 - String mode-name parsing with integer fallback for older datasets
 ```
+
+---
+
+## Multi-source provider architecture
+
+After validating the Geant4 backend against the user's real install, a second
+data source was added: **SandiaDecay** (Sandia Labs, LGPL-2.1, derived from
+ENSDF + LBNL ToRI). The motivation was thesis-level cross-validation — a
+single-source forward model is fragile to evaluation choices in any one
+library, but agreement across two independent ENSDF-derived libraries gives
+much stronger confidence.
+
+### Provider abstraction
+
+`IDecayProvider` was introduced with a high-level data model:
+
+```
+ParentDecayInfo {
+    IsotopeKey, bool stable, double meanLife,
+    vector<DecayBranch> branches
+}
+DecayBranch {
+    DecayMode mode,
+    double branchingRatio,
+    IsotopeKey daughter,
+    vector<Emission> emissions    // already aggregated photons per branch
+}
+Emission { type=Gamma|XRay|AnnihilationPair, energy, intensity }
+```
+
+The crucial insight was that Geant4 data is **per-level** (you compute the
+cascade yourself by walking the level tree), while SandiaDecay is **per-decay**
+(the XML directly tells you "this transition produces these gammas with these
+intensities"). The provider abstraction hides this difference: each provider
+exposes pre-aggregated photon emissions per branch. `Geant4Provider` runs the
+cascade computation internally (moved out of `GammaSpectrum.cc`); 
+`SandiaProvider` parses the XML and uses the data directly.
+
+Result: `GammaSpectrum` and `ChainBuilder` are now provider-agnostic — they
+work on `IDecayProvider` only and don't care where the data came from. Adding
+a third backend (e.g. LARA, ENDF) is a ~150-line `*.cc` implementing 4
+methods.
+
+### SandiaDecay XML format gotchas
+
+1. **Two formats coexist**: the verbose `sandia.decay.xml` (~31 MB) uses
+   full tag/attribute names (`<nuclide>`, `atomicNumber`, etc.) while the
+   minified `sandia.decay.nocoinc.min.xml` (~6 MB) uses abbreviated forms
+   (`<n>`, `an`, `mn`, `iso`, `s`, `hl` etc.). `SandiaProvider` auto-detects
+   which is in use by counting `<nuclide ` vs `<n ` occurrences and switches
+   tag/attribute lookup tables accordingly.
+
+2. **Attribute lookup via substring search is fragile** — if attribute
+   `key` is a prefix of another attribute (`isomerNumber` contains `iso`),
+   searching for `iso="..."` would match the wrong attribute. Fixed by
+   requiring the previous character to be whitespace or `<`.
+
+3. **Photon intensities are per-decay-going-down-this-branch**, not per
+   primary decay. Total per-primary contribution is `branch.branchingRatio
+   × emission.intensity`. Verified: K-40 → Ar-40 EC branch (BR=0.1086) with
+   1460 keV gamma intensity 0.9825 gives 0.1067 per primary, matching DDEP
+   reference.
+
+4. **Decay mode strings differ from Geant4**: Sandia uses short codes
+   (`b-`, `b+`, `it`, `ec`, `a`, `sf`, etc.). A separate `parseMode` table
+   maps these. The IDecayProvider DecayMode enum was extended with a
+   generic `EC` value to handle Sandia's shell-unspecified EC, alongside
+   Geant4's K/L/M/N-shell-specific variants.
+
+### Integration
+
+- `SpectrumOptions.source` selects backend at builder construction
+- `g.DataSource.Geant4` / `g.DataSource.Sandia` exposed via Python
+- `result.source_name` returned for diagnostic purposes
+- CLI accepts `[geant4|sandia]` as 8th argument
+- Cross-validation: `test/showcase.py` produces side-by-side plots
+  (`11_geant4_vs_sandia.png`) showing both backends on the same axes;
+  agreement is < 1% at all major peaks > 1% intensity
+
+### Bundled data
+
+`data/sandia/sandia.decay.nocoinc.min.xml` (6.2 MB, LGPL-2.1) is bundled
+with the project. License attribution and full LGPL text are in
+`data/sandia/SANDIA_LICENSE.txt` and `data/sandia/README.md`.
+
+`SandiaProvider::locateXml` resolution order:
+1. constructor argument
+2. `$SANDIA_DECAY_XML` env var
+3. `<repo>/data/sandia/` (bundled)
+4. `/usr/local/share/g4gamma/`
+
+### Future providers worth adding
+
+- **LARA / DDEP** (LNHB): ~220 evaluated isotopes, gold-standard for
+  metrology. CSV format per-nuclide. Excellent for high-confidence
+  validation on headline NORM isotopes. Recommended next addition.
+- **ENDF-6 decay sublibrary** (ENDF/B, JEFF, JENDL): ~3800 nuclides,
+  standardised format used by transport codes. The format is genuinely
+  awful to parse and the data ultimately derives from ENSDF anyway, so
+  this is lower priority.
+- **NUBASE / GENF**: comprehensive but again ENSDF-derived; lower priority.
+
+---
+
+## Test results (final, all 21 passing)
+
+```
+[1] Cs-137 SE             OK  661 keV peak: 0.852385 = 0.947 × (1/1.111)
+[2] Cs-137 finite-t       OK  Ba-137m at T½: 0.4735 = 0.947 × 0.5
+[3] K-40 SE               OK  1460 keV peak: 0.1055
+[4] K-40 with X-rays      OK  K-α at 2.957 keV, K-β at 3.190 keV
+[5] Na-22 with B+         OK  511 keV: 1.8072 = 2 × 0.9036
+[6] Na-22 no annihilation OK  511 peak suppressed cleanly
+[7] Out-of-range bins     OK  no spurious counts
+[8] Cs-137 real format    OK  661 keV peak with ENSDFSTATE-driven M assignment
+[8b] Real format chain    OK  Ba-137m identified as M=1 isomer
+[9] SandiaDecay backend (Cs-137, K-40, Co-60, U-238 chain)   8 sub-checks  OK
+
+Cross-validation:
+  Geant4 vs Sandia agreement at major peaks: < 1% across all NORM isotopes
+  Cs-137 661 keV:       Geant4=0.8524  Sandia=0.8533  diff=0.1%
+  K-40 1460 keV:        Geant4=0.1075  Sandia=0.1067  diff=0.7%
+  Co-60 total:          Geant4=1.9988  Sandia=1.9985  diff=0.02%
+  U-238 chain Bi-214 609 keV:  Sandia=0.461  (matches DDEP reference)
+```

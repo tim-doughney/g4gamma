@@ -18,6 +18,7 @@ const char* decayModeName(DecayMode m) {
         case DecayMode::LshellEC: return "EC(L)";
         case DecayMode::MshellEC: return "EC(M)";
         case DecayMode::NshellEC: return "EC(N)";
+        case DecayMode::EC: return "EC";
         case DecayMode::Alpha: return "alpha";
         case DecayMode::Proton: return "p";
         case DecayMode::Neutron: return "n";
@@ -35,6 +36,16 @@ const char* decayModeName(DecayMode m) {
 
 bool changesZA(DecayMode m) {
     return m != DecayMode::IT;
+}
+
+bool decayModeIsBetaPlus(DecayMode m) {
+    return m == DecayMode::BetaPlus || m == DecayMode::Beta2Plus;
+}
+
+bool decayModeIsEC(DecayMode m) {
+    return m == DecayMode::KshellEC || m == DecayMode::LshellEC ||
+           m == DecayMode::MshellEC || m == DecayMode::NshellEC ||
+           m == DecayMode::EC;
 }
 
 // Map the decay-mode field from the file into our enum. The field is stored

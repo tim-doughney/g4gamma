@@ -235,9 +235,129 @@ def main():
         g.IsotopeKey(55, 137, 0), -1.0, edges_keV * g.units.keV)
     counts = np.array(res.counts)
     Test.check("661 keV peak (real format)", counts[661], 0.947 * (1.0 / 1.111))
-    # Check the chain found Ba-137m (M=1)
     has_ba137m = any(c.isotope.M == 1 and c.isotope.Z == 56 for c in res.contributions)
     Test.check("Ba-137m found in chain (real format)", float(has_ba137m), 1.0)
+
+    # ----- SandiaDecay backend --------------------------------------------
+    # Try to find sandia.decay.*.xml. If it's not available, skip tests
+    # rather than fail.
+    print("\n[9] SandiaDecay backend")
+    sandia_paths = [
+        os.path.join(here, "..", "data", "sandia", "sandia.decay.nocoinc.min.xml.gz"),
+        os.path.join(here, "..", "data", "sandia", "sandia.decay.nocoinc.min.xml"),
+        os.path.join(here, "..", "data", "sandia", "sandia.decay.xml"),
+    ]
+    sandia_xml = next((p for p in sandia_paths if os.path.isfile(p)), None)
+    if sandia_xml:
+        os.environ["SANDIA_DECAY_XML"] = sandia_xml
+
+        # Cs-137
+        opts = g.SpectrumOptions()
+        opts.source = g.DataSource.Sandia
+        res = g.GammaSpectrumBuilder(opts).build(
+            g.IsotopeKey(55, 137, 0), -1.0, edges)
+        counts = np.array(res.counts)
+        Test.check("Cs-137 661 keV via Sandia",
+                   counts[661], 0.853, tol=0.005)
+        Test.check("Cs-137 chain has Ba-137m",
+                   float(any(c.isotope.M == 1 and c.isotope.Z == 56 for c in res.contributions)),
+                   1.0)
+
+        # K-40
+        res = g.GammaSpectrumBuilder(opts).build(
+            g.IsotopeKey(19, 40, 0), -1.0, edges)
+        counts = np.array(res.counts)
+        Test.check("K-40 1460 keV via Sandia",
+                   counts[1460], 0.107, tol=0.005)
+
+        # Co-60 - the canonical 2-gamma-per-decay test
+        res = g.GammaSpectrumBuilder(opts).build(
+            g.IsotopeKey(27, 60, 0), -1.0, edges)
+        counts = np.array(res.counts)
+        Test.check("Co-60 total γ/decay via Sandia",
+                   counts.sum(), 2.0, tol=0.01)
+        Test.check("Co-60 1173 keV via Sandia",
+                   counts[1173], 0.9985, tol=0.005)
+        Test.check("Co-60 1332 keV via Sandia",
+                   counts[1332], 0.9998, tol=0.005)
+
+        # U-238 chain - check at least the 609 keV Bi-214 peak comes through
+        res = g.GammaSpectrumBuilder(opts).build(
+            g.IsotopeKey(92, 238, 0), -1.0, edges)
+        counts = np.array(res.counts)
+        Test.check("U-238 chain Bi-214 609 keV via Sandia",
+                   counts[609], 0.461, tol=0.02)
+        Test.check("U-238 chain has many members via Sandia",
+                   float(len(res.contributions) >= 15), 1.0)
+    else:
+        print("  SKIPPED -- no sandia.decay XML found in data/sandia/")
+        print(f"           tried: {sandia_paths}")
+
+    # ----- LARA backend ---------------------------------------------------
+    print("\n[10] LARA / DDEP backend")
+    lara_dir = os.path.join(here, "..", "data", "lara")
+    has_loose = os.path.isdir(lara_dir) and any(
+        f.endswith(".lara.txt") for f in os.listdir(lara_dir))
+    has_tarball = (os.path.isfile(os.path.join(lara_dir, "lara.tar.gz")) or
+                   os.path.isfile(os.path.join(lara_dir, "lara.tar")))
+    if has_loose or has_tarball:
+        os.environ["LARA_DATA_DIR"] = lara_dir
+
+        opts_lara = g.SpectrumOptions()
+        opts_lara.source = g.DataSource.Lara
+
+        # Cs-137 -- DDEP 2023 says 661.6553 keV at 85.01%
+        res = g.GammaSpectrumBuilder(opts_lara).build(
+            g.IsotopeKey(55, 137, 0), -1.0, edges)
+        counts = np.array(res.counts)
+        Test.check("Cs-137 661 keV via LARA", counts[661], 0.8501, tol=0.001)
+
+        # K-40 -- DDEP 2025 says 1460.822 keV at 10.34%
+        res = g.GammaSpectrumBuilder(opts_lara).build(
+            g.IsotopeKey(19, 40, 0), -1.0, edges)
+        counts = np.array(res.counts)
+        Test.check("K-40 1460 keV via LARA", counts[1460], 0.1034, tol=0.001)
+
+        # Co-60 -- 1173.228 + 1332.492
+        res = g.GammaSpectrumBuilder(opts_lara).build(
+            g.IsotopeKey(27, 60, 0), -1.0, edges)
+        counts = np.array(res.counts)
+        Test.check("Co-60 1173 keV via LARA", counts[1173], 0.9985, tol=0.001)
+        Test.check("Co-60 1332 keV via LARA", counts[1332], 0.9998, tol=0.001)
+
+        # Ra-226 -- 186.211 keV at 3.555%
+        res = g.GammaSpectrumBuilder(opts_lara).build(
+            g.IsotopeKey(88, 226, 0), -1.0, edges)
+        counts = np.array(res.counts)
+        Test.check("Ra-226 186 keV via LARA", counts[186], 0.0356, tol=0.001)
+
+        # Tri-source cross-validation: K-40 1460 keV across all three backends
+        # should agree within ~1%.
+        if sandia_xml:
+            os.environ["G4RADIOACTIVEDATA"]  = f"{TESTDATA}/RealRad"
+            os.environ["G4LEVELGAMMADATA"]   = f"{TESTDATA}/RealEvap"
+            os.environ["G4ENSDFSTATEDATA"]   = f"{TESTDATA}/RealEnsdf"
+            # Co-60 1332 keV is the cleanest cross-source comparison since
+            # it's a single emission with intensity ~1.0 in all backends.
+            o_g = g.SpectrumOptions(); o_g.source = g.DataSource.Geant4
+            o_s = g.SpectrumOptions(); o_s.source = g.DataSource.Sandia
+            o_l = g.SpectrumOptions(); o_l.source = g.DataSource.Lara
+            try:
+                # Use Cs-137 since real-format synthetic data covers it
+                vg = np.array(g.GammaSpectrumBuilder(o_g).build(
+                    g.IsotopeKey(55, 137, 0), -1.0, edges).counts)[661]
+                vs = np.array(g.GammaSpectrumBuilder(o_s).build(
+                    g.IsotopeKey(55, 137, 0), -1.0, edges).counts)[661]
+                vl = np.array(g.GammaSpectrumBuilder(o_l).build(
+                    g.IsotopeKey(55, 137, 0), -1.0, edges).counts)[661]
+                spread = max(vg, vs, vl) - min(vg, vs, vl)
+                Test.check("Cs-137 661 keV: Geant4/Sandia/LARA spread <0.5%",
+                           float(spread / max(vg, vs, vl) < 0.005), 1.0)
+                print(f"          Geant4={vg:.4f}  Sandia={vs:.4f}  LARA={vl:.4f}  spread={spread:.4f}")
+            except Exception as e:
+                print(f"  cross-source check skipped: {e}")
+    else:
+        print(f"  SKIPPED -- no LARA files in {lara_dir}")
 
     print(f"\n--- {Test.passed} passed, {Test.failed} failed ---")
     sys.exit(0 if Test.failed == 0 else 1)

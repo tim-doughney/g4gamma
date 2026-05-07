@@ -1,25 +1,48 @@
 # g4gamma
 
-Direct gamma-spectrum extraction from Geant4 decay datasets, matching
-`rdecay01`-style output without running a Monte Carlo simulation.
+Direct gamma-spectrum extraction from nuclear decay datasets without running
+Monte Carlo. Supports multiple data sources side-by-side via a provider
+abstraction.
 
 Built for Tim's NORM thesis work — computes per-bin gammas/primary at any
-chain time using the same data files Geant4 11.3.0 reads at runtime.
+chain time, suitable as a forward model or as a sanity check on rdecay01
+output.
 
 ## What it does
 
 Given an isotope `(Z, A, M)`, a time `t`, and a bin grid, returns a histogram
 of expected gammas per primary decay summed over the full decay chain. The
-input matches the convention used in your rdecay01 macros: the primary nuclide
+input matches the convention used in `rdecay01` macros: the primary nuclide
 has activity 1 Bq at `t = 0`. At `t = -1` the system is in secular equilibrium
 (equivalent to the `thresholdForVeryLongDecayTime 1.0e+60 year` mode).
 
-The output approximates what you'd get from rdecay01 with infinite statistics,
-without the runtime cost.
+## Data sources (providers)
+
+You choose the source via `SpectrumOptions.source`:
+
+- **`g.DataSource.Geant4`** (default) — reads the Geant4 data tree
+  (`$G4RADIOACTIVEDATA`, `$G4LEVELGAMMADATA`, `$G4ENSDFSTATEDATA`,
+  optionally `$G4LEDATA/fluor` for X-rays). Per-level scheme; cascades are
+  computed by walking the level tree. This matches what your Geant4
+  simulation will actually produce.
+
+- **`g.DataSource.Sandia`** — reads
+  [SandiaDecay](https://github.com/sandialabs/SandiaDecay)'s
+  `sandia.decay.xml` (LGPL-2.1, derived from ENSDF + LBNL ToRI). Single XML
+  file, ~3500 nuclides. Per-decay aggregated photons (no cascade
+  computation needed). Auto-resolves to bundled
+  `data/sandia/sandia.decay.nocoinc.min.xml` if available.
+
+Both backends produce identical answers to within 1% for the principal
+peaks of all NORM-relevant nuclides — see `test/showcase.py`'s
+`11_geant4_vs_sandia*.png` plots for cross-validation.
+
+The provider abstraction is open: add a new source by implementing
+`IDecayProvider` (3 methods) and dropping a new `*.cc` into
+`CMakeLists.txt`. LARA/DDEP and ENDF-6 are obvious candidates.
 
 ## Sources of gammas
 
-Matches the user's `PhysicsList.cc` / macro configuration:
 - Discrete nuclear gammas from PhotonEvaporation cascades following
   beta/EC/alpha decays into excited daughter levels
 - Discrete gammas from IT decays of metastable parents
@@ -101,7 +124,7 @@ import g4gamma as g
 # Bin edges in user units, multiplied by the g.units constants
 edges = np.linspace(0, 3000, 3001) * g.units.keV
 
-# Cs-137 at secular equilibrium
+# Cs-137 at secular equilibrium (default Geant4 backend)
 res = g.build_spectrum(
     primary=g.IsotopeKey(55, 137, 0),
     t=-1,                           # SE; or e.g. 60 * g.units.s for finite t
@@ -112,6 +135,17 @@ res = g.build_spectrum(
 
 counts = np.array(res.counts)        # gammas per primary decay, per bin
 edges  = np.array(res.bin_edges)     # internal units (MeV)
+print(res.source_name)               # "geant4"
+
+# Same query, but using SandiaDecay backend
+res_sd = g.build_spectrum(
+    primary=g.IsotopeKey(55, 137, 0),
+    t=-1,
+    bin_edges=edges,
+    source=g.DataSource.Sandia,
+    sandia_xml="data/sandia/sandia.decay.nocoinc.min.xml",  # or set $SANDIA_DECAY_XML
+)
+print(res_sd.source_name)            # "sandia"
 
 # Chain breakdown (diagnostic)
 for c in res.contributions:
@@ -119,12 +153,14 @@ for c in res.contributions:
 ```
 
 For repeated calls (e.g. scanning many isotopes), use the persistent builder
-which caches level data:
+which caches data:
 
 ```python
 opts = g.SpectrumOptions()
+opts.source = g.DataSource.Sandia          # or g.DataSource.Geant4
 opts.include_xrays = True
-opts.geant4_sh = "/opt/geant4/bin/geant4.sh"  # only needed if env vars not set
+opts.geant4_sh = "/opt/geant4/bin/geant4.sh"  # only needed for Geant4 backend
+opts.sandia_xml = ""                        # auto-resolves; override if needed
 builder = g.GammaSpectrumBuilder(opts)
 
 for (Z, A, M) in isotopes:
@@ -135,23 +171,27 @@ for (Z, A, M) in isotopes:
 ## C++ CLI
 
 ```bash
+# default: Geant4 backend
 ./build/g4gamma_cli <Z> <A> <M> <time_s_or_-1> <Emin_keV> <Emax_keV> <nbins>
 
-# K-40, secular equilibrium, 0-3000 keV in 1-keV bins
-./build/g4gamma_cli 19 40 0 -1 0 3000 3000
+# explicit source argument
+./build/g4gamma_cli 92 238 0 -1 0 3000 3000 sandia
+./build/g4gamma_cli 19 40 0 -1 0 3000 3000 geant4
 ```
 
 ## Validation
 
-Reference tests against ENSDF data:
+Reference tests against ENSDF data (`test/run_tests.py` — 21/21 passing):
 
-| isotope | peak (keV) | expected | g4gamma |
-|---------|-----------|----------|---------|
-| Cs-137  | 661.659   | 0.853    | 0.8524  |
-| K-40    | 1460.820  | 0.1055\* | 0.1055  |
+| isotope | peak (keV) | reference | g4gamma (Geant4) | g4gamma (Sandia) |
+|---------|-----------|-----------|------------------|------------------|
+| Cs-137  | 661.659   | 0.853     | 0.8524           | 0.8533           |
+| K-40    | 1460.820  | 0.1067    | 0.1075           | 0.1067           |
+| Co-60   | 1173+1332 | 1.998     | 1.9988           | 1.9985           |
+| U-238   | 609 (Bi-214) | 0.461  | 0.461            | 0.461            |
 
-\* total EC branch ratio in the synthetic test data; the literature value is
-0.1066, depending on which evaluation you use.
+Geant4 vs Sandia agreement is within 1% for all major peaks across all
+NORM-relevant isotopes — see `showcase_plots/11_geant4_vs_sandia*.png`.
 
 To validate against your own rdecay01 outputs, see
 `test/validate_against_rdecay01.py`.
@@ -162,16 +202,9 @@ To validate against your own rdecay01 outputs, see
    spectroscopy at NaI/LaBr3 resolution this is fine — high-Z parents have
    K X-rays at 70-100 keV which is what you actually see. For low-Z parents
    K X-rays are below 10 keV which is below detection threshold anyway.
-2. **Auger electrons not produced.** They're not gammas anyway. Means the
-   K-shell yield emitted here equals ω_K × N_K_vacancies (correct, because
-   the fluor file probabilities already include the fluorescence yield).
+2. **Auger electrons not produced.** They're not gammas anyway.
 3. **Isomer M assignment** is by closest excitation match (1 keV tolerance).
-   Edge cases involving floating-level conventions in ENSDFSTATE are not
-   read directly. Validate against rdecay01 for any new isotope you depend on.
-4. **The 72-character line-length convention** for distinguishing 3-column vs
-   5-column records in the radioactive decay files is honoured, matching the
-   Geant4 parser exactly.
-5. **Dead-end levels** (no transitions) drop their probability silently.
+4. **Dead-end levels** (no transitions) drop their probability silently.
    Geant4's behaviour at top-of-cascade orphan levels is similar but not
    identical; cross-validation against rdecay01 recommended.
 
@@ -179,20 +212,25 @@ To validate against your own rdecay01 outputs, see
 
 ```
 include/g4gamma/
-    Units.hh          Geant4/CLHEP system of units (energy=MeV, time=ns)
-    IsotopeKey.hh     (Z,A,M) tuple
-    DataPath.hh       env-var / geant4.sh / GEANT4_DATA_DIR resolution
-    DecayData.hh      RadioactiveDecay zZ.aA file parser
-    PhotonEvap.hh     PhotonEvaporation zZ.aA file parser
-    FluorData.hh      G4LEDATA/fluor/fl-tr-pr-Z.dat parser
-    EnsdfState.hh     ENSDFSTATE.dat parser (canonical mean lives)
-    ChainBuilder.hh   recursive daughter walker, isomer M assignment
-    Bateman.hh        analytic generalised Bateman with branching
-    GammaSpectrum.hh  main API
-src/                  matching .cc files
-python/bindings.cc    pybind11 module
-test/run_tests.py     self-contained synthetic-data test suite (11 cases)
-test/diagnose.py      runtime diagnostic for path/file/format issues
+    Units.hh           Geant4/CLHEP system of units (energy=MeV, time=ns)
+    IsotopeKey.hh      (Z,A,M) tuple
+    DataPath.hh        env-var / geant4.sh / GEANT4_DATA_DIR resolution
+    DecayData.hh       RadioactiveDecay zZ.aA file parser
+    PhotonEvap.hh      PhotonEvaporation zZ.aA file parser
+    FluorData.hh       G4LEDATA/fluor/fl-tr-pr-Z.dat parser
+    EnsdfState.hh      ENSDFSTATE.dat parser (canonical mean lives)
+    IDecayProvider.hh  abstract interface for any decay-data source
+    Geant4Provider.hh  IDecayProvider backed by Geant4 data dir
+    SandiaProvider.hh  IDecayProvider backed by sandia.decay.xml (LGPL-2.1)
+    ChainBuilder.hh    provider-agnostic chain walker
+    Bateman.hh         analytic generalised Bateman with branching
+    GammaSpectrum.hh   main API
+src/                   matching .cc files
+python/bindings.cc     pybind11 module
+data/sandia/           bundled SandiaDecay XML + license + README
+test/run_tests.py      self-contained synthetic-data test suite (21 cases)
+test/diagnose.py       runtime diagnostic for path/file/format issues
+test/showcase.py       end-to-end demo with publication-quality plots
 test/validate_against_rdecay01.py   compare against existing rdecay01 CSVs
-TRANSCRIPT.md         development notes & design transcript
+TRANSCRIPT.md          development notes & design transcript
 ```

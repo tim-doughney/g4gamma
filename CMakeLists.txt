@@ -13,6 +13,9 @@ endif()
 # Python is needed for pybind11
 find_package(Python COMPONENTS Interpreter Development REQUIRED)
 
+# zlib for LARA tarball decompression (.tar.gz support)
+find_package(ZLIB REQUIRED)
+
 # pybind11 — prefer a system install if findable, else FetchContent
 find_package(pybind11 CONFIG QUIET)
 if(NOT pybind11_FOUND)
@@ -41,12 +44,16 @@ add_library(g4gamma_core STATIC
     src/PhotonEvap.cc
     src/FluorData.cc
     src/EnsdfState.cc
+    src/Geant4Provider.cc
+    src/SandiaProvider.cc
+    src/LaraProvider.cc
     src/ChainBuilder.cc
     src/Bateman.cc
     src/GammaSpectrum.cc
 )
 target_include_directories(g4gamma_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_compile_options(g4gamma_core PRIVATE -Wall -Wextra -O2)
+target_link_libraries(g4gamma_core PRIVATE ZLIB::ZLIB)
 
 # pybind11 module
 pybind11_add_module(g4gamma python/bindings.cc)

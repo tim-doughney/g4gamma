@@ -37,6 +37,7 @@ enum class DecayMode {
     LshellEC,
     MshellEC,
     NshellEC,
+    EC,            // generic EC (used by SandiaDecay etc.) - shell unspecified
     Alpha,
     Proton,
     Neutron,
@@ -51,6 +52,8 @@ enum class DecayMode {
 };
 
 bool changesZA(DecayMode m);
+bool decayModeIsBetaPlus(DecayMode m);
+bool decayModeIsEC(DecayMode m);
 const char* decayModeName(DecayMode m);
 
 // One channel of one decay mode.

@@ -93,16 +93,27 @@ PYBIND11_MODULE(g4gamma, m) {
         .def_property_readonly("counts", [](const SpectrumResult& r){
             return py::array_t<double>(r.counts.size(), r.counts.data());
         })
-        .def_readonly("contributions", &SpectrumResult::contributions);
+        .def_readonly("contributions", &SpectrumResult::contributions)
+        .def_readonly("source_name", &SpectrumResult::sourceName);
+
+    // ---- DataSource enum -------------------------------------------------
+    py::enum_<DataSource>(m, "DataSource")
+        .value("Geant4", DataSource::Geant4)
+        .value("Sandia", DataSource::Sandia)
+        .value("Lara",   DataSource::Lara)
+        .export_values();
 
     // ---- SpectrumOptions -------------------------------------------------
     py::class_<SpectrumOptions>(m, "SpectrumOptions")
         .def(py::init<>())
+        .def_readwrite("source",                 &SpectrumOptions::source)
         .def_readwrite("include_annihilation",   &SpectrumOptions::includeAnnihilation)
         .def_readwrite("include_xrays",          &SpectrumOptions::includeXrays)
         .def_readwrite("max_chain_depth",        &SpectrumOptions::maxChainDepth)
         .def_readwrite("isomer_lifetime_thresh", &SpectrumOptions::isomerLifetimeThresh)
         .def_readwrite("geant4_sh",              &SpectrumOptions::geant4Sh)
+        .def_readwrite("sandia_xml",             &SpectrumOptions::sandiaXml)
+        .def_readwrite("lara_dir",               &SpectrumOptions::laraDir)
         .def_readwrite("level_match_tolerance",  &SpectrumOptions::levelMatchTolerance)
         .def_readwrite("verbose",                &SpectrumOptions::verbose);
 
@@ -112,19 +123,22 @@ PYBIND11_MODULE(g4gamma, m) {
         .def("build", &build_spectrum,
              py::arg("primary"), py::arg("t"), py::arg("bin_edges"),
              "Build the spectrum. t<0 means secular equilibrium. Energies in internal units (MeV).")
-        .def("set_rad_dir",     &GammaSpectrumBuilder::setRadDir)
-        .def("set_evap_dir",    &GammaSpectrumBuilder::setEvapDir)
-        .def("set_ledata_dir",  &GammaSpectrumBuilder::setLeDataDir);
+        .def("source_name", &GammaSpectrumBuilder::sourceName);
 
     // ---- Top-level convenience function ----------------------------------
     m.def("build_spectrum",
           [](const IsotopeKey& iso, double t, py::array_t<double> edges,
              bool include_annihilation, bool include_xrays,
-             const std::string& geant4_sh, int verbose) {
+             const std::string& geant4_sh, int verbose,
+             DataSource source, const std::string& sandia_xml,
+             const std::string& lara_dir) {
               SpectrumOptions o;
+              o.source              = source;
               o.includeAnnihilation = include_annihilation;
               o.includeXrays        = include_xrays;
               o.geant4Sh            = geant4_sh;
+              o.sandiaXml           = sandia_xml;
+              o.laraDir             = lara_dir;
               o.verbose             = verbose;
               GammaSpectrumBuilder b(o);
               return build_spectrum(b, iso, t, edges);
@@ -134,7 +148,11 @@ PYBIND11_MODULE(g4gamma, m) {
           py::arg("include_xrays") = false,
           py::arg("geant4_sh") = "",
           py::arg("verbose") = 0,
-          "One-shot convenience wrapper around GammaSpectrumBuilder.");
+          py::arg("source") = DataSource::Geant4,
+          py::arg("sandia_xml") = "",
+          py::arg("lara_dir") = "",
+          "One-shot convenience wrapper. Set source=g.DataSource.Sandia for "
+          "SandiaDecay or g.DataSource.Lara for LARA/DDEP.");
 
     // ---- DataPath helpers (useful for debugging path resolution) ---------
     m.def("locate_radioactive_data", &DataPath::radioactiveDecayDir,

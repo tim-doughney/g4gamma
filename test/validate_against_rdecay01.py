@@ -41,7 +41,7 @@ def main():
     # The CSV file has 1 row per bin: column 0 is bin lower edge, column 1 is count.
     # (Geant4 csv format depends on options; adjust as needed.)
     print(f"Reading rdecay01 reference: {csv_path}")
-    data = np.loadtxt(csv_path, comments="#", delimiter=",")
+    data = np.loadtxt(csv_path, comments="#", delimiter=",")[1:-1,0]
     if data.ndim == 1:
         # single column of bin counts
         rd_counts = data
@@ -60,7 +60,7 @@ def main():
     edges = rd_edges_keV * g.units.keV
     opts = g.SpectrumOptions()
     opts.include_annihilation = True
-    opts.include_xrays = False  # rdecay01 with ARM=false doesn't emit X-rays
+    opts.include_xrays = True  # rdecay01 with ARM=false doesn't emit X-rays
     builder = g.GammaSpectrumBuilder(opts)
     res = builder.build(g.IsotopeKey(Z, A, M), -1.0, edges)
     g4g_counts = np.array(res.counts)
