@@ -99,28 +99,47 @@ fetch_one() {
     if [ "${FORCE:-0}" != "1" ] && [ -f "$out" ] && [ "$(wc -c < "$out")" -gt 200 ]; then
         echo "SKIP"; return
     fi
-    if [ "$FETCHER" = "curl" ]; then
-        curl -fLsS --max-time 8 -o "$out.tmp" \
-            "http://www.lnhb.fr/nuclides/${iso}.lara.txt" 2>/dev/null
-    else
-        wget -q --timeout=8 -O "$out.tmp" \
-            "http://www.lnhb.fr/nuclides/${iso}.lara.txt"
+
+    # Primary URL: /nuclides/<Sym>-<A>.lara.txt  (works for ~95% of nuclides)
+    _fetch_url "http://www.lnhb.fr/nuclides/${iso}.lara.txt" "$out.tmp"
+    if [ $? -eq 0 ]; then echo "OK"; return; fi
+
+    # Fallback: LaraWEB Results directory uses versioned names like Th-230_@03.lara.txt.
+    # Query Result_Lara2.php to find the actual filename, then download it.
+    local lara_name
+    lara_name=$(curl -sS --max-time 12 -A "Mozilla/5.0" -X POST \
+        "http://www.lnhb.fr/Laraweb/Result_Lara2.php" \
+        -d "Nuclide[]=${iso//-/}&Show_data=Show+all+data&Form_Origine=1&Data_show=1&Emi_show=1&Langue=ENG" \
+        2>/dev/null | grep -o "Results/${iso}_[^\"]*\.lara\.txt" | head -1)
+    if [ -n "$lara_name" ]; then
+        _fetch_url "http://www.lnhb.fr/Laraweb/${lara_name}" "$out.tmp"
+        if [ $? -eq 0 ]; then echo "OK"; return; fi
     fi
-    if [ $? -eq 0 ]; then
-        sz=$(wc -c < "$out.tmp" 2>/dev/null || echo 0)
-        if [ "$sz" -gt 200 ]; then
-            mv "$out.tmp" "$out"
-            echo "OK"
-            return
-        fi
-    fi
+
     rm -f "$out.tmp"
     echo "FAIL"
 }
 
+_fetch_url() {
+    local url="$1" dest="$2"
+    if [ "$FETCHER" = "curl" ]; then
+        curl -fLsS --max-time 8 -A "Mozilla/5.0" -o "$dest" "$url" 2>/dev/null
+    else
+        wget -q --timeout=8 -O "$dest" "$url"
+    fi
+    if [ $? -ne 0 ]; then rm -f "$dest"; return 1; fi
+    local sz; sz=$(wc -c < "$dest" 2>/dev/null || echo 0)
+    if [ "$sz" -gt 200 ] && ! grep -q "Page non trouvée\|404" "$dest" 2>/dev/null; then
+        mv "$dest" "${dest%.tmp}"
+        return 0
+    fi
+    rm -f "$dest"
+    return 1
+}
+
 # Export for parallel sub-shells if needed.
 export FETCHER FORCE
-export -f fetch_one
+export -f fetch_one _fetch_url
 
 OK=0
 SKIP=0
@@ -159,6 +178,7 @@ else
     echo
     echo "Results: $OK fetched, $SKIP already-present, $FAIL failed"
 fi
+
 
 if [ $PACK -eq 1 ]; then
     echo
