@@ -29,10 +29,12 @@ CMake produces three targets: `g4gamma_core` (static C++ lib), `g4gamma` (pybind
 python ../test/run_tests.py          # from inside build/
 PYTHONPATH=build python test/run_tests.py  # from repo root
 
-# Validate against rdecay01 Geant4 Monte Carlo (requires a CSV run):
-#   1. cd buildG4RadDecayExample && ./rdecay01 moduleTest.mac  (1e7 events ~10 min; adjust /run/beamOn)
-#   2. python test/validate_against_geant4.py \
-#          buildG4RadDecayExample/u238_AFtrue_1e7_h1_3.csv 10000000
+# Validate against rdecay01 Geant4 Monte Carlo (bundled 10k-event CSV):
+python test/validate_against_geant4.py buildG4RadDecayExample/u238_AFtrue_h1_3.csv 10000
+# Th-232 (1e7-event run):
+python test/validate_against_geant4.py buildG4RadDecayExample/th232_AFtrue_1e7_h1_3.csv 10000000
+# The script auto-detects the isotope from the CSV filename (e.g. u238, th232).
+# For your own run: adjust n_primaries to match /run/beamOn in your macro
 ```
 
 `test/diagnose.py` is a runtime diagnostic that prints env vars, resolved data directories, chain construction, and spectrum output — run it first when debugging data-path or zero-output issues.
@@ -67,6 +69,8 @@ To add a new data source: implement `IDecayProvider` (3–4 methods) and add the
 `ChainBuilder` walks the provider graph from the root isotope into a topologically-ordered `std::vector<ChainNode>`. `Bateman` then solves the generalised Bateman equations to get activities:
 - `solve(t)` — analytic finite-time solution
 - `solveSecularEq()` — secular equilibrium (equivalent to `thresholdForVeryLongDecayTime 1e60 year` in rdecay01); pass `t=-1` in the Python API
+
+`DecayBranch` has an optional `terminals` field (vector of `(IsotopeKey, fraction)` pairs). When set by `Geant4Provider`, `ChainBuilder` uses it *instead of* `daughter` for activity routing — splitting the daughter activity by terminal fraction while the full `branchingRatio` still governs emission weight. This correctly handles the case where a β⁻ channel to a non-isomeric excitation cascades to an isomeric intermediate level (e.g., Th-234 → Pa at 166 keV → 100% Pa-234m via photon evaporation).
 
 **Layer 3 — Binner** (`GammaSpectrum.cc`)
 
@@ -117,9 +121,13 @@ res = builder.build(g.IsotopeKey(92, 238, 0), -1, edges)
 
 ## LARA data notes
 
-`data/lara/lara.tar.gz` contains ~44 nuclides including the full U-238 and Th-232 chains. Run `data/lara/fetch_lara.sh [--pack]` to re-download.
+`data/lara/lara.tar.gz` contains 48 nuclides covering the full U-238 and Th-232 chains. Run `data/lara/fetch_lara.sh [--pack]` to re-download.
 
 **Th-230** is not at the standard `/nuclides/` path on LNHB but is available via LaraWEB. `fetch_lara.sh` discovers the versioned filename (`Th-230_@03.lara.txt`) by POSTing to `Result_Lara2.php` and downloads it automatically. The real file (27 emission lines, including Ra K X-rays) is included in `lara.tar.gz`.
+
+**Th-232 chain intermediates** (Ra-224, Rn-220, Po-216, Po-212) are now included. Ra-224 and Po-212 have LNHB data files; Rn-220 and Po-216 are pure-alpha emitters with chain-structure-only entries. These nuclides are required to connect Pb-212/Bi-212/Tl-208 to the rest of the Th-232 chain.
+
+**Newer LARA file format (NIST 2025+):** Some files (e.g. Pb-212) use a cascade format with a 9th "Parent" column and embed gammas from all daughter nuclides in one file. `LaraProvider` detects this (by checking the Parent column) and skips daughter-nuclide emissions — they are counted separately when each daughter's own file is loaded. Without this guard, cascade-format files would double-count all daughter gammas.
 
 ## rdecay01 settings → g4gamma options mapping
 
@@ -132,6 +140,14 @@ res = builder.build(g.IsotopeKey(92, 238, 0), -1, edges)
 
 Setting `full_xray_cascade=True` propagates both fluorescence (fl-tr-pr-Z.dat) and Auger/Coster-Kronig (au-tr-pr-Z.dat) secondary vacancies through K→L→M→N shells, reproducing `SetARM(true)` + `SetAugerCascade(true)`. IC electrons are attributed to the **daughter** atom's electron cloud (`Zfluor = ch.daughter.Z`) in all decay modes. `include_xrays=True` gives K-shell fluorescence only, no Auger cascade. L X-rays (10–16 keV for Pb/Bi) are below NaI/LaBr3 threshold but included for HPGe comparisons.
 
-## Known Geant4 backend limitation for U-238
+## Geant4 backend cascade terminal tracking
 
-`getCascade()` does not stop at intermediate isomers in the photon-evaporation level scheme. For U-238 SE, Geant4's simulation stops the cascade at U-234 M=2 (1421 keV) and M=1 (989 keV); the analytic cascades straight through, producing +0.05 excess in 120–200 keV and +0.19 in 800–1600 keV. Per-peak agreement for observable gammas (> 200 keV) is within ±2%. **For U-238 total-count work, prefer `DataSource.Sandia`** — it agrees with rdecay01 to within 1% total. A sanity cap in `getCascade()` suppresses ICC for transitions with E > 500 keV and fAlpha > 0.25 (fixing anomalous PhotonEvaporation data entries).
+`getCascade()` tracks where photon-evaporation probability stops at long-lived intermediate levels (τ > 1 ns). The `terminalProb` field in `Cascade` records the distribution; `ChainBuilder` uses `DecayBranch::terminals` to split daughter activity correctly. This reproduces Geant4's behavior: e.g., Th-234 β- channels to Pa-234 at 166–187 keV all cascade 100% to Pa-234m (73.92 keV), giving Pa-234m its correct SE activity of ~1 Bq while Pa-234 ground (6.7 h) receives only ~0.16% from the Pa-234m IT branch.
+
+**Ghost isomer guard:** Before stopping a cascade at a long-lived level, `getCascade()` verifies that G4RADIOACTIVEDATA contains a P-block for that level (i.e., a `z{Z}.a{A}` file with a parent-excitation entry matching within `levelTolerance`). If no P-block exists, the level is a *ghost isomer* — ENSDFSTATE records its lifetime but Geant4 has no explicit decay data for it, so Geant4 de-excites it immediately via photon evaporation. In this case `dstIsIsomer` is forced false and the cascade continues. The corresponding guard in `compute()` checks `parentFor(br.daughter) != nullptr` before setting `deferToIsomer` — if false, the cascade fires directly rather than deferring.
+
+The canonical example is Ra-224 level 84.372 keV (T½=7.48×10⁻¹⁰ s → τ=1.08 ns, marginally above the 1 ns threshold). ENSDFSTATE records it; no `z88.a224.m1` exists in G4RADIOACTIVEDATA. Without the guard, 26% of Th-228 decay activity was silently dropped (Ra-224 activity=0.736 instead of 1.000). With the guard: Ra-224 activity=1.000 and Th-232 SE total 4.257 γ/primary vs rdecay01 simulation 4.261 (−0.1%).
+
+Validation results:
+- **U-238 SE** (`full_xray_cascade=True`): model total 3.221 γ/primary vs rdecay01 10,000-event simulation 3.247 (−0.8%). All major gamma peaks within ±2% of ENSDF reference.
+- **Th-232 SE** (`full_xray_cascade=True`): model total 4.257 γ/primary vs rdecay01 1,000,000-event simulation 4.261 (−0.1%). Key peaks: Pb-212 239 keV −0.2%, Tl-208 583 keV +1.4%, Bi-212 727 keV +0.7%, Ac-228 911 keV +3.8%, Tl-208 2615 keV +0.1%.

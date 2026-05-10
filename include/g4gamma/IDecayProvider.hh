@@ -39,8 +39,14 @@ struct Emission {
 struct DecayBranch {
     DecayMode               mode;
     double                  branchingRatio;      // relative; sum over branches = 1
-    IsotopeKey              daughter;            // (Z', A', M')
+    IsotopeKey              daughter;            // (Z', A', M') — used when terminals is empty
     std::vector<Emission>   emissions;
+    // If non-empty, overrides `daughter` for activity accounting in ChainBuilder.
+    // Each entry is (terminal IsotopeKey, fraction); fractions sum to ~1.
+    // The branchingRatio still governs emission weight; only daughter tracking splits.
+    // Set by Geant4Provider when the photon-evaporation cascade stops at ≥1 isomeric
+    // intermediate level rather than running straight through to the ground state.
+    std::vector<std::pair<IsotopeKey,double>> terminals;
 };
 
 // Decay info for one parent (Z, A, M).

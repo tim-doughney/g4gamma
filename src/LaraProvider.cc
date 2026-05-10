@@ -382,6 +382,18 @@ bool LaraProvider::parseContent(const IsotopeKey& key, const std::string& conten
     info.stable   = false;
     info.meanLife = 0.0;
 
+    // Newer LARA files (NIST 2025+ format) include cascade gammas from all
+    // daughter nuclides in one file, with a trailing "Parent" column that
+    // identifies which nuclide in the chain each emission belongs to.  When
+    // individual daughter files are also present we must skip emissions whose
+    // Parent is not this file's primary nuclide, otherwise they are counted
+    // twice.  Build the expected primary-nuclide symbol for comparison.
+    std::string primarySym = elementName(key.Z);
+    if (!primarySym.empty()) {
+        primarySym += "-" + std::to_string(key.A);
+        if (key.M > 0) primarySym += "m";
+    }
+
     struct DaughterRec {
         DecayMode  mode;
         IsotopeKey key;
@@ -438,6 +450,13 @@ bool LaraProvider::parseContent(const IsotopeKey& key, const std::string& conten
         } else {
             auto fields = splitSemis(line);
             if (fields.size() < 5) continue;
+            // New cascade format: 9th field is "Parent" — skip emissions that
+            // belong to a daughter nuclide (they are counted in that nuclide's
+            // own file).
+            if (fields.size() >= 9 && !primarySym.empty()) {
+                const std::string& parent = fields[8];
+                if (!parent.empty() && parent != primarySym) continue;
+            }
             double E_keV = parseDouble(fields[0], -1.0);
             double I_pct = parseDouble(fields[2], 0.0);
             const std::string& type = fields[4];

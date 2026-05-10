@@ -5,7 +5,7 @@
 // File format (per G4LevelReader::LevelManager):
 //   For each level i (i = 0, 1, 2, ...):
 //     <i_int> <floatFlag>
-//     <E_keV> <T_ns> <spin> <ntrans>
+//     <E_keV> <T_half_s> <spin> <ntrans>   (T_half_s is half-life in seconds)
 //     repeated ntrans times:
 //       <i2> <Etrans_keV> <fProb> <multipolarity> <ratio> <fAlpha>
 //       if fAlpha > 0: 10 more numbers (K,L1,L2,L3,M1..,N..) = ICC weights

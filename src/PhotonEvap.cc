@@ -33,19 +33,24 @@ const std::vector<NuclearLevel>* PhotonEvapData::load(int Z, int A) {
 
     // Format-following loop. Read until EOF or read failure.
     while (in >> levelIdx >> floatTag) {
-        double E_keV = 0.0;
-        double T_ns  = 0.0;          // mean lifetime in ns (Geant4 internal time unit)
-        double spin  = 0.0;
-        int    ntrans = 0;
+        double E_keV    = 0.0;
+        double T_half_s = 0.0;  // half-life in seconds (Geant4 G4LevelReader convention)
+        double spin     = 0.0;
+        int    ntrans   = 0;
 
-        if (!(in >> E_keV >> T_ns >> spin >> ntrans)) break;
+        if (!(in >> E_keV >> T_half_s >> spin >> ntrans)) break;
 
+        // Convert T_half_s → mean life in ns, matching G4LevelReader:
+        //   fTime *= CLHEP::second / ln(2)   where CLHEP::second = 1e9 ns
+        static const double ln2 = std::log(2.0);
         NuclearLevel lvl;
         lvl.energy = E_keV * keV;
-        if (T_ns > 0.0) {
-            lvl.meanLifeTime = T_ns;          // file already in ns
+        if (T_half_s > 0.0) {
+            lvl.meanLifeTime = T_half_s / ln2 * 1e9;  // ns
+        } else if (T_half_s < 0.0) {
+            lvl.meanLifeTime = std::numeric_limits<double>::infinity();  // stable
         } else {
-            lvl.meanLifeTime = std::numeric_limits<double>::infinity();
+            lvl.meanLifeTime = 0.0;  // prompt / no defined lifetime
         }
 
         // Ensure monotonically non-decreasing energy (Geant4 enforces this).

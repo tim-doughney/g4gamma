@@ -27,7 +27,8 @@ struct SpectrumOptions {
     DataSource source = DataSource::Geant4;
 
     bool   includeAnnihilation = true;
-    bool   includeXrays        = false;
+    bool   includeXrays        = false; // K-shell X-rays (Geant4 backend) / pass-through (Sandia/LARA)
+    bool   fullXrayCascade     = false; // Geant4 backend: K→L→M fluorescence cascade; implies includeXrays
     int    maxChainDepth       = 50;
     double isomerLifetimeThresh = 1.0 * units::ns;
     double levelMatchTolerance  = 1.0 * units::keV;

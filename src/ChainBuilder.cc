@@ -49,15 +49,31 @@ void ChainBuilder::build(const IsotopeKey& root, int maxDepth) {
 
         for (size_t bi = 0; bi < info->branches.size(); ++bi) {
             const auto& br = info->branches[bi];
-            const auto& dk = br.daughter;
-            if (dk.Z < 0 || dk.A <= 0) continue;
-            bool isNew = (fIndex.find(dk) == fIndex.end());
-            int dIdx = addNode(dk);
-            ChainNode& parent = fNodes[idx];
-            parent.edges.push_back(ChainNode::Edge{
-                dIdx, br.branchingRatio, br.mode, static_cast<int>(bi)
-            });
-            if (isNew) q.push(dIdx);
+            if (!br.terminals.empty()) {
+                // Cascade terminated at ≥1 intermediate isomers: route daughter
+                // activity proportionally, but keep the full branchingRatio for
+                // emission accounting (gammas are already in br.emissions).
+                for (const auto& [tk, frac] : br.terminals) {
+                    if (tk.Z < 0 || tk.A <= 0 || frac < 1e-9) continue;
+                    bool isNew = (fIndex.find(tk) == fIndex.end());
+                    int dIdx = addNode(tk);
+                    ChainNode& parent = fNodes[idx];
+                    parent.edges.push_back(ChainNode::Edge{
+                        dIdx, br.branchingRatio * frac, br.mode, static_cast<int>(bi)
+                    });
+                    if (isNew) q.push(dIdx);
+                }
+            } else {
+                const auto& dk = br.daughter;
+                if (dk.Z < 0 || dk.A <= 0) continue;
+                bool isNew = (fIndex.find(dk) == fIndex.end());
+                int dIdx = addNode(dk);
+                ChainNode& parent = fNodes[idx];
+                parent.edges.push_back(ChainNode::Edge{
+                    dIdx, br.branchingRatio, br.mode, static_cast<int>(bi)
+                });
+                if (isNew) q.push(dIdx);
+            }
         }
     }
 }

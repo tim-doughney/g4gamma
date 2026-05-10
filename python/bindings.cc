@@ -109,6 +109,7 @@ PYBIND11_MODULE(g4gamma, m) {
         .def_readwrite("source",                 &SpectrumOptions::source)
         .def_readwrite("include_annihilation",   &SpectrumOptions::includeAnnihilation)
         .def_readwrite("include_xrays",          &SpectrumOptions::includeXrays)
+        .def_readwrite("full_xray_cascade",      &SpectrumOptions::fullXrayCascade)
         .def_readwrite("max_chain_depth",        &SpectrumOptions::maxChainDepth)
         .def_readwrite("isomer_lifetime_thresh", &SpectrumOptions::isomerLifetimeThresh)
         .def_readwrite("geant4_sh",              &SpectrumOptions::geant4Sh)
@@ -128,7 +129,7 @@ PYBIND11_MODULE(g4gamma, m) {
     // ---- Top-level convenience function ----------------------------------
     m.def("build_spectrum",
           [](const IsotopeKey& iso, double t, py::array_t<double> edges,
-             bool include_annihilation, bool include_xrays,
+             bool include_annihilation, bool include_xrays, bool full_xray_cascade,
              const std::string& geant4_sh, int verbose,
              DataSource source, const std::string& sandia_xml,
              const std::string& lara_dir) {
@@ -136,6 +137,7 @@ PYBIND11_MODULE(g4gamma, m) {
               o.source              = source;
               o.includeAnnihilation = include_annihilation;
               o.includeXrays        = include_xrays;
+              o.fullXrayCascade     = full_xray_cascade;
               o.geant4Sh            = geant4_sh;
               o.sandiaXml           = sandia_xml;
               o.laraDir             = lara_dir;
@@ -146,13 +148,15 @@ PYBIND11_MODULE(g4gamma, m) {
           py::arg("primary"), py::arg("t"), py::arg("bin_edges"),
           py::arg("include_annihilation") = true,
           py::arg("include_xrays") = false,
+          py::arg("full_xray_cascade") = false,
           py::arg("geant4_sh") = "",
           py::arg("verbose") = 0,
           py::arg("source") = DataSource::Geant4,
           py::arg("sandia_xml") = "",
           py::arg("lara_dir") = "",
           "One-shot convenience wrapper. Set source=g.DataSource.Sandia for "
-          "SandiaDecay or g.DataSource.Lara for LARA/DDEP.");
+          "SandiaDecay or g.DataSource.Lara for LARA/DDEP. "
+          "full_xray_cascade enables K→L→M fluorescence cascade (Geant4 backend only).");
 
     // ---- DataPath helpers (useful for debugging path resolution) ---------
     m.def("locate_radioactive_data", &DataPath::radioactiveDecayDir,

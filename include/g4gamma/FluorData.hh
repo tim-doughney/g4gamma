@@ -44,6 +44,10 @@ public:
 
     const std::vector<FluorVacancy>* load(int Z);
 
+    // Find vacancy data by EADL shell ID (1=K, 3=L1, 5=L2, 6=L3, 8=M1, …).
+    // Returns nullptr if Z has no data or the shell is absent.
+    const FluorVacancy* findVacancy(int Z, int eadlShellId);
+
     // Convenience: total fluorescence yield from a given vacancy (sum of probs).
     double yield(int Z, int vacancyShellIndex);
 

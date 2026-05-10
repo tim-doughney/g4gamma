@@ -29,7 +29,7 @@ int main(int argc, char** argv) {
 
     SpectrumOptions opts;
     opts.includeAnnihilation = true;
-    opts.includeXrays        = false;
+    opts.includeXrays        = false;  // set true for K-shell X-rays; full_xray_cascade for K→L→M
     if (argc == 9) {
         if (std::strcmp(argv[8], "sandia") == 0) opts.source = DataSource::Sandia;
         else if (std::strcmp(argv[8], "geant4") == 0) opts.source = DataSource::Geant4;

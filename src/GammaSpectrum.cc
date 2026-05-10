@@ -21,6 +21,7 @@ void GammaSpectrumBuilder::initProviderFromOpts() {
         Geant4ProviderOptions go;
         go.geant4Sh        = fOpts.geant4Sh;
         go.includeXrays    = fOpts.includeXrays;
+        go.fullXrayCascade = fOpts.fullXrayCascade;
         go.isomerThreshold = fOpts.isomerLifetimeThresh;
         go.levelTolerance  = fOpts.levelMatchTolerance;
         fOwnedProvider = std::make_unique<Geant4Provider>(go);
@@ -119,7 +120,8 @@ SpectrumResult GammaSpectrumBuilder::build(const IsotopeKey& primary,
         for (const auto& branch : info->branches) {
             for (const auto& em : branch.emissions) {
                 bool keep = true;
-                if (em.type == EmissionType::XRay && !fOpts.includeXrays) keep = false;
+                if (em.type == EmissionType::XRay &&
+                    !fOpts.includeXrays && !fOpts.fullXrayCascade) keep = false;
                 if (!keep) continue;
                 // Annihilation skip if the user disabled it
                 if (em.type == EmissionType::AnnihilationPair &&

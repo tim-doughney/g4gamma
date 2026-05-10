@@ -43,6 +43,7 @@ add_library(g4gamma_core STATIC
     src/DecayData.cc
     src/PhotonEvap.cc
     src/FluorData.cc
+    src/AugerData.cc
     src/EnsdfState.cc
     src/Geant4Provider.cc
     src/SandiaProvider.cc

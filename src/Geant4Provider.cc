@@ -149,23 +149,14 @@ Geant4Provider::getCascade(int Z, int A, int startLevel) {
             if (tr.selectionProb <= 0.0) continue;
             if (tr.lowerIndex < 0 || tr.lowerIndex >= N) continue;
             double pSel = p[i] * tr.selectionProb;
-            // Physical ICC sanity cap: for E > 500 keV, BrIcc gives fAlpha < 0.20
-            // for all realistic multipolarities (including high-multipole M4/E4) at any Z.
-            // PhotonEvaporation data occasionally stores anomalously large fAlpha for
-            // high-excitation levels (e.g. U-234 at 947 keV has fAlpha=0.37 for the 804 keV
-            // transition — ~300× above the physical bound). The legitimate outlier in NORM
-            // chains is Ba-137m (M4, 661 keV, fAlpha≈0.10), safely below the threshold.
-            double gammaEmitProb = tr.gammaEmitProb;
-            if (tr.gammaEnergy > 0.5 * units::MeV && gammaEmitProb < 0.80)
-                gammaEmitProb = 1.0;
-            // Photon
-            double gammaCount = pSel * gammaEmitProb;
+            // Photon: Geant4 uses fAlpha from file directly: gammaEmitProb = 1/(1+fAlpha)
+            double gammaCount = pSel * tr.gammaEmitProb;
             if (gammaCount > 0.0) {
                 em.energies.push_back(tr.gammaEnergy);
                 em.intensities.push_back(gammaCount);
             }
             // IC -> shell vacancies (track all 10 ICC shells)
-            double icCount = pSel * (1.0 - gammaEmitProb);
+            double icCount = pSel * (1.0 - tr.gammaEmitProb);
             if (icCount > 0.0 && tr.hasICC) {
                 double sumW = 0.0;
                 for (int k = 0; k < Cascade::N_ICC; ++k) sumW += tr.iccWeights[k];
@@ -174,11 +165,68 @@ Geant4Provider::getCascade(int Z, int A, int startLevel) {
                         em.shellVacancy[k] += icCount * tr.iccWeights[k] / sumW;
                 }
             }
-            p[tr.lowerIndex] += pSel;
+            // Geant4 stops the cascade when the destination level is long-lived
+            // (LifeTime > fMaxLifeTime = 1 ns). It marks the nucleus as LongLived
+            // and G4RadioactiveDecay creates the daughter as a separate radioactive ion.
+            // We replicate this: do not propagate probability into a long-lived intermediate
+            // level (index > 0). The probability that "stops" here belongs to the isomer's
+            // own decay chain, which ChainBuilder handles separately.
+            //
+            // Additional guard: only stop if the level actually has a G4RADIOACTIVEDATA
+            // P-block. Some levels are marginally above the 1 ns mean-lifetime threshold
+            // in ENSDFSTATE but are not in the RadioactiveDecay database (e.g. Ra-224
+            // at 84.4 keV, τ=1.079 ns). Geant4 de-excites those immediately via
+            // G4PhotonEvaporation rather than creating a separate ion; we must continue
+            // cascading through them here.
+            const auto& dstLvl = (*lvls)[tr.lowerIndex];
+            bool dstIsIsomer = (tr.lowerIndex > 0) &&
+                               (dstLvl.meanLifeTime > fOpts.isomerThreshold);
+            if (dstIsIsomer) {
+                // Verify the level is actually tracked by G4RADIOACTIVEDATA.
+                bool hasDecayEntry = false;
+                if (const auto* parents = fDecay->load(Z, A)) {
+                    for (const auto& par : *parents) {
+                        if (std::abs(par.parentExcitation - dstLvl.energy) <
+                                fOpts.levelTolerance) {
+                            hasDecayEntry = true;
+                            break;
+                        }
+                    }
+                }
+                if (!hasDecayEntry) dstIsIsomer = false;
+            }
+            if (!dstIsIsomer) {
+                p[tr.lowerIndex] += pSel;
+            } else {
+                // Track probability that stopped at this isomeric intermediate level.
+                bool found = false;
+                for (auto& [li, tp] : em.terminalProb) {
+                    if (li == tr.lowerIndex) { tp += pSel; found = true; break; }
+                }
+                if (!found) em.terminalProb.emplace_back(tr.lowerIndex, pSel);
+            }
         }
     }
+    // Probability that cascaded all the way to the ground state.
+    if (p[0] > 1e-9)
+        em.terminalProb.emplace_back(0, p[0]);
+
     fCascadeCache[key] = std::move(em);
     return fCascadeCache[key];
+}
+
+IsotopeKey Geant4Provider::levelIndexToKey(int Z, int A, int levelIdx) {
+    if (levelIdx == 0) return IsotopeKey{Z, A, 0};
+    const auto* lvls = fEvap->load(Z, A);
+    if (!lvls || levelIdx >= static_cast<int>(lvls->size()))
+        return IsotopeKey{Z, A, 0};
+    double exc = (*lvls)[levelIdx].energy;
+    int M = 0;
+    if (fEnsdf->ready()) {
+        int m = fEnsdf->excitationToM(Z, A, exc, fOpts.isomerThreshold, fOpts.levelTolerance);
+        if (m >= 0) M = m;
+    }
+    return IsotopeKey{Z, A, M};
 }
 
 // ICC index (0=K,1=L1,2=L2,3=L3,4=M1..8=M5,9=N+) → EADL shell ID in fl-tr-pr files.
@@ -315,11 +363,15 @@ const ParentDecayInfo* Geant4Provider::compute(const IsotopeKey& key) {
             startE = ch.daughterExcitation;
         }
 
-        // If the daughter resolved to a tracked isomer (M >= 1), the cascade
-        // is deferred to the isomer's own IT decay.
+        // If the daughter resolved to a tracked isomer (M >= 1) AND that isomer
+        // has a G4RADIOACTIVEDATA entry, defer the cascade to the isomer's own
+        // IT decay. If no radioactive-decay data exists for the isomeric level,
+        // Geant4 de-excites it immediately via G4PhotonEvaporation; we fire the
+        // cascade here instead (same gammas, activity routed to ground state).
         bool deferToIsomer = (ch.mode != DecayMode::IT) &&
                               (br.daughter.M >= 1) &&
-                              (ch.daughterExcitation > 0.0);
+                              (ch.daughterExcitation > 0.0) &&
+                              (parentFor(br.daughter) != nullptr);
         bool needXrays = fOpts.includeXrays || fOpts.fullXrayCascade;
 
         // IC vacancies from the photon-evaporation cascade.
@@ -336,6 +388,23 @@ const ParentDecayInfo* Geant4Provider::compute(const IsotopeKey& key) {
                 br.emissions.push_back(em);
             }
             if (needXrays) shellVac = cas.shellVacancy;
+
+            // Determine where the cascade actually terminated.  If probability
+            // stopped at one or more long-lived intermediate levels (isomers) we
+            // must route the daughter activity to those levels, not blindly to
+            // M=0 as resolveDaughter() returned.  Record the terminal distribution
+            // in br.terminals so ChainBuilder can split activity correctly.
+            if (!cas.terminalProb.empty()) {
+                for (const auto& [li, prob] : cas.terminalProb) {
+                    if (prob < 1e-9) continue;
+                    IsotopeKey tk = levelIndexToKey(cZ, cA, li);
+                    bool found = false;
+                    for (auto& [k, f] : br.terminals) {
+                        if (k == tk) { f += prob; found = true; break; }
+                    }
+                    if (!found) br.terminals.emplace_back(tk, prob);
+                }
+            }
         }
 
         // IC electrons and EC/BetaPlus both produce vacancies in the daughter atom's

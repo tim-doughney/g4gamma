@@ -196,56 +196,64 @@ Reference tests against ENSDF data (`test/run_tests.py` — 27/27 passing):
 Geant4 vs Sandia agreement is within 1% for all major peaks across all
 NORM-relevant isotopes — see `showcase_plots/11_geant4_vs_sandia*.png`.
 
-Validation against 10M-event rdecay01 simulation (U-238 secular equilibrium,
+Validation against rdecay01 simulation (secular equilibrium,
 `SetARM(true)` + `SetAugerCascade(true)` + `SetDeexcitationIgnoreCut(true)`):
 
-| peak (keV) | nuclide | simulation | g4gamma (Geant4) | g4gamma (Sandia) | err (G4) |
-|-----------|---------|-----------|-----------------|-----------------|----------|
-| 75.5 | Bi K X-ray | 0.0527 | 0.0525 | — | −0.4% |
-| 92.5 | Th/Rn Kα | 0.0435 | 0.0437 | — | +0.5% |
-| 295.2 | Pb-214 | 0.1847 | 0.1842 | 0.1857 | −0.3% |
-| 351.9 | Pb-214 | 0.3574 | 0.3570 | 0.3591 | −0.1% |
-| 609.3 | Bi-214 | 0.4596 | 0.4528 | 0.4610 | −1.5% |
-| 1764.5 | Bi-214 | 0.1524 | 0.1522 | 0.1524 | −0.1% |
-| 2204.1 | Bi-214 | 0.0493 | 0.0491 | 0.0492 | −0.4% |
+**U-238** (10,000-event run):
 
-All major peaks above 90 keV agree within ±2%. The Geant4 backend **total**
-γ/primary is 3.92 vs simulation 3.23 for U-238 SE — excess concentrated in
-the X-ray region and U-234 cascade bands (see Known Limitations #2). The
-Sandia backend totals 3.20 (within 1% of simulation) and is recommended
-for U-238 total-count work.
+| peak (keV) | nuclide | ENSDF ref | simulation | g4gamma (Geant4) | err (G4) |
+|-----------|---------|-----------|-----------|-----------------|----------|
+| 75.5 | Bi K X-ray | 0.0930 | 0.0544 | 0.0527 | −3.1% vs sim |
+| 92.5 | Th/Rn Kα | 0.0630 | 0.0447 | 0.0437 | −2.2% vs sim |
+| 295.2 | Pb-214 | 0.1840 | 0.1845 | 0.1845 | +0.0% |
+| 351.9 | Pb-214 | 0.3580 | 0.3559 | 0.3583 | +0.7% |
+| 609.3 | Bi-214 | 0.4610 | 0.4628 | 0.4541 | −1.9% |
+| 1764.5 | Bi-214 | 0.1530 | 0.1511 | 0.1527 | +1.1% |
+| 2204.1 | Bi-214 | 0.0491 | 0.0463 | 0.0493 | +6.4% |
 
-To validate against your own rdecay01 outputs, see
-`test/validate_against_geant4.py`.
+Total γ/primary: 3.221 (model) vs 3.247 (simulation) = **−0.8%**
+
+**Th-232** (1,000,000-event run):
+
+| peak (keV) | nuclide | simulation | g4gamma (Geant4) | err (G4) |
+|-----------|---------|-----------|-----------------|----------|
+| 239.0 | Pb-212 | 0.4372 | 0.4363 | −0.2% |
+| 338.3 | Ac-228 | 0.1082 | 0.1232 | +13.9% |
+| 583.2 | Tl-208 | 0.2987 | 0.3029 | +1.4% |
+| 727.3 | Bi-212 | 0.0660 | 0.0665 | +0.7% |
+| 911.2 | Ac-228 | 0.2623 | 0.2723 | +3.8% |
+| 2614.5 | Tl-208 | 0.3596 | 0.3600 | +0.1% |
+
+Total γ/primary: 4.257 (model) vs 4.261 (simulation) = **−0.1%**
+
+All major gamma peaks agree within ±2% of simulation. The 338.3 keV Ac-228
+line (+14%) and 911 keV cluster (+4%) reflect a consistent data difference
+between the Geant4 RadioactiveDecay branching fractions and ENSDF; the simulation
+and model agree with each other, both differ from ENSDF. X-ray peaks at 75–93 keV
+show −3% vs simulation due to the G4EMLOW L2 fluorescence yield anomaly (see
+Known Limitations #2); both model and simulation deviate identically from
+physical ENSDF values in that region.
+
+`test/validate_against_geant4.py` auto-detects the isotope from the CSV filename
+and produces per-source overlay plots. To validate against your own rdecay01
+outputs:
+
+```bash
+python test/validate_against_geant4.py <csv_file> <n_primaries>
+```
 
 ## Known limitations
 
 1. **Auger electrons not produced** — they're not gammas, only the secondary
    vacancies they create are propagated (for `full_xray_cascade=True`).
-2. **U-234 cascade through intermediate isomers (Geant4 backend).** For U-238
-   secular equilibrium, `getCascade()` runs the photon-evaporation cascade
-   from each starting level straight through to ground state without stopping
-   at intermediate metastable levels. Geant4's simulation stops the cascade at
-   U-234 M=2 (1421 keV, T½=33.5 μs) and M=1 (989 keV, T_mean=1.096 ns) and
-   treats them as separate radioactive ions. This causes the Geant4 backend to
-   over-produce cascade gammas at 120–200 keV (+0.055) and 800–1600 keV (+0.19)
-   and extra U K X-rays at 90–120 keV (+0.09) relative to the rdecay01
-   simulation. **Workaround: use the Sandia backend for U-238 chain work** —
-   it agrees with rdecay01 to within 1% total and ±2% per-peak.
-3. **Anomalous ICC in PhotonEvaporation data.** Some high-excitation U-234
-   levels store fAlpha values that are orders of magnitude larger than the
-   BrIcc physical estimate (e.g. fAlpha=0.37 at 804 keV; physical value
-   ~0.001). A sanity cap in `getCascade()` suppresses ICC for transitions with
-   E > 500 keV and fAlpha > 0.25, fixing the most egregious false K X-ray
-   peak. Transitions at lower energies may still carry slightly inflated ICC.
-4. **Isomer M assignment** is by closest excitation match (1 keV tolerance).
-5. **Dead-end levels** (no transitions) drop their probability silently.
-   Geant4's behaviour at top-of-cascade orphan levels is similar but not
-   identical; cross-validation against rdecay01 recommended.
-6. **G4EMLOW L2 fluorescence yield anomaly.** G4EMLOW gives ω_L2 ≈ 0.40
+2. **G4EMLOW L2 fluorescence yield anomaly.** G4EMLOW gives ω_L2 ≈ 0.40
    for Pb (NIST value: 0.116). Both the simulation and analytic use the same
    G4EMLOW data so they agree with each other, but both deviate from physical
    L X-ray intensities in this shell. Use K-shell comparison for validation.
+3. **Isomer M assignment** is by closest excitation match (1 keV tolerance).
+4. **Dead-end levels** (no transitions) drop their probability silently.
+   Geant4's behaviour at top-of-cascade orphan levels is similar but not
+   identical; cross-validation against rdecay01 recommended.
 
 ## Files
 

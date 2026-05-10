@@ -68,6 +68,14 @@ const std::vector<FluorVacancy>* FluorDataLoader::load(int Z) {
     return &iter->second;
 }
 
+const FluorVacancy* FluorDataLoader::findVacancy(int Z, int eadlShellId) {
+    const auto* vacs = load(Z);
+    if (!vacs) return nullptr;
+    for (const auto& v : *vacs)
+        if (v.vacancyShell == eadlShellId) return &v;
+    return nullptr;
+}
+
 double FluorDataLoader::yield(int Z, int vacancyShellIndex) {
     const auto* v = load(Z);
     if (!v) return 0.0;
