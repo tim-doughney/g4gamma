@@ -402,7 +402,7 @@ with the project. License attribution and full LGPL text are in
 
 ---
 
-## Test results (final, all 21 passing)
+## Test results (after multi-source addition, 21 passing)
 
 ```
 [1] Cs-137 SE             OK  661 keV peak: 0.852385 = 0.947 × (1/1.111)
@@ -423,3 +423,217 @@ Cross-validation:
   Co-60 total:          Geant4=1.9988  Sandia=1.9985  diff=0.02%
   U-238 chain Bi-214 609 keV:  Sandia=0.461  (matches DDEP reference)
 ```
+
+---
+
+## X-ray accuracy: Auger/CK cascade and Zfluor fix (May 2026)
+
+### Motivation
+
+After adding the full K→L→M fluorescence cascade (`full_xray_cascade=True`,
+using fl-tr-pr G4LEDATA data), the analytic model was validated against a
+10M-event rdecay01 simulation of U-238 at secular equilibrium with
+`SetARM(true)`, `SetAugerCascade(true)`, `SetDeexcitationIgnoreCut(true)`.
+The simulation total was 3.2317 γ/primary; the analytic gave 3.5125. Two
+distinct bugs were identified.
+
+### Bug 1: Zfluor used parent Z instead of daughter Z for IC vacancies
+
+In `Geant4Provider::compute()`, the element whose fluorescence data was used
+for IC-generated vacancies was initially set to the parent isotope's Z,
+overriding to the daughter's Z only for EC/β+ modes. This is physically
+wrong: the photon-evaporation cascade happens inside the *daughter* atom
+(the nucleus has already transformed), so IC electrons come from the
+daughter's electron cloud in ALL decay modes.
+
+```cpp
+// Before (wrong for β⁻, α, IT → daughter Z was ignored for IC)
+int Zfluor = key.Z;
+if (ch.mode == DecayMode::KshellEC || ...) Zfluor = ch.daughter.Z;
+
+// After (correct: IC always uses daughter Z)
+int Zfluor = ch.daughter.Z;
+```
+
+Effect: for β⁻ decays like Pb-214→Bi-214, the analytic was producing Pb
+K X-rays (73–90 keV) instead of Bi K X-rays (77–92 keV). This created a
+false peak at ~73 keV (Pb Kα2) and a false peak at ~96 keV (Pa Kα1 from
+Pa-234 beta-minus, using Pa Z=91 instead of U Z=92). After the fix, Bi Kα
+at 75.5 keV matches the simulation to **−0.4%**.
+
+### Bug 2: Missing Auger/Coster-Kronig secondary vacancies
+
+With `SetAugerCascade(true)`, Geant4's G4UAtomicDeexcitation propagates
+the two secondary vacancies created by each Auger transition. The previous
+analytic implementation only propagated fluorescence secondary vacancies
+(the donor shell). This meant that for L1 vacancies:
+- Coster-Kronig L1→L2+outer transitions (high probability, especially for
+  heavy elements) were not propagating secondary L2 vacancies
+- L2 (and deeper) X-ray production was systematically underestimated
+
+**Solution**: added `AugerDataLoader` to parse `G4LEDATA/auger/au-tr-pr-Z.dat`
+files. Format: 4-value block headers (all equal to the EADL vacancy shell ID),
+transition rows `<secShell1> <secShell2> <prob> <energy_MeV>`, `-1` block
+separator, `-2` EOF. The probability column sums to `(1 − ω_shell)` per block.
+
+In `appendXRays()`, after processing fluorescence transitions for each ICC
+shell, Auger secondary vacancies are now propagated:
+
+```cpp
+if (fAuger) {
+    const AugerVacancy* av = fAuger->findVacancy(Zfluor, kICCtoEADL[icc]);
+    if (av) {
+        for (const auto& atr : av->transitions) {
+            double count = N * atr.prob;
+            int sec1 = eadlToICC(atr.secShell1);
+            if (sec1 > icc && sec1 < N_ICC) shellVac[sec1] += count;
+            int sec2 = eadlToICC(atr.secShell2);
+            if (sec2 > icc && sec2 < N_ICC) shellVac[sec2] += count;
+        }
+    }
+}
+```
+
+The `secICC > icc` guard prevents backward propagation (Auger secondary
+vacancies are always in shells outer to the initial vacancy).
+
+`fAuger` is loaded from `ledataDir + "/auger"` when `fullXrayCascade=true`.
+
+### Files added / changed
+
+- `include/g4gamma/AugerData.hh` — new: `AugerTransition`, `AugerVacancy`,
+  `AugerDataLoader`
+- `src/AugerData.cc` — new: parser for au-tr-pr-Z.dat
+- `include/g4gamma/Geant4Provider.hh` — added `fAuger` member
+- `src/Geant4Provider.cc` — Zfluor fix + Auger cascade in `appendXRays()` +
+  fAuger construction
+- `CMakeLists.txt` — added `src/AugerData.cc` to `g4gamma_core`
+
+### Validation results (U-238 SE, 10M events, full_xray_cascade=True)
+
+| peak (keV) | nuclide | simulation | analytic | err |
+|-----------|---------|-----------|----------|-----|
+| 75.5 | Bi K X-ray | 0.0527 | 0.0525 | −0.4% |
+| 92.5 | Th/Rn Kα | 0.0435 | 0.0437 | +0.5% |
+| 295.2 | Pb-214 | 0.1847 | 0.1842 | −0.3% |
+| 351.9 | Pb-214 | 0.3574 | 0.3570 | −0.1% |
+| 609.3 | Bi-214 | 0.4596 | 0.4528 | −1.5% |
+| 1120.3 | Bi-214 | 0.1494 | 0.1487 | −0.5% |
+| 1764.5 | Bi-214 | 0.1522 | 0.1522 | −0.1% |
+| 2204.1 | Bi-214 | 0.0493 | 0.0491 | −0.4% |
+
+All major gamma peaks above 90 keV agree within ±2% (most within ±0.5%).
+
+### Remaining discrepancy in total count (after Auger/Zfluor fix)
+
+Total analytic (3.92 at the time) exceeds simulation (3.23) by +0.69 γ/primary.
+The dominant sources were U-234 cascade excess and L X-ray overproduction —
+investigated further in the next section.
+
+### Test suite after changes: 27/27 passing
+
+```
+[1–8b] All prior tests unchanged  OK
+[9]    SandiaDecay backend (8 checks)  OK
+[10]   LARA/DDEP backend (5 checks + cross-backend spread <0.5%)  OK
+```
+
+---
+
+## ICC sanity cap and U-234 cascade analysis (May 2026)
+
+Follow-on investigation into why the analytic exceeds the simulation by +0.69
+γ/primary for U-238 secular equilibrium.
+
+### ICC sanity cap (implemented)
+
+Scanning the top residual bins of (analytic − simulation) revealed a false
+U Kα₁ peak at 98–99 keV at 0.040 γ/primary (simulation: 0.0006). Root cause:
+U-234 level 11 (947.64 keV) has fAlpha=0.37 for its 804 keV transition in
+PhotonEvaporation6.1 — some 300× above the physical BrIcc estimate (~0.001
+for Z=92 at 804 keV). The ICC fractions were confirmed to be stored as
+normalised fractions (not absolute values), so fAlpha × ICC_K_frac = 0.268,
+and this directly drove large U K-shell vacancy production.
+
+**Fix in `Geant4Provider.cc::getCascade()`**: for any transition with
+E_gamma > 500 keV AND gammaEmitProb < 0.80 (fAlpha > 0.25), the ICC
+contribution is suppressed (gammaEmitProb set to 1.0). Physical justification:
+BrIcc gives fAlpha < 0.20 for any common multipole (including M4) at E > 500
+keV for any Z. The threshold 0.25 comfortably clears the legitimate Ba-137m
+M4 transition at 661 keV (fAlpha≈0.10) while catching the anomalous U-234
+entry (fAlpha=0.37). All 27 tests pass.
+
+### Band-by-band comparison (Geant4 and Sandia vs simulation)
+
+After the ICC cap:
+
+| Band (keV) | sim | g4 (fixed) | sandia+xray |
+|-----------|-----|------------|-------------|
+| 0–8 | 0.1295 | 0.1581 | 0.0000 |
+| 8–18 | 0.6800 | 0.8448 | 0.7058 |
+| 18–60 | 0.0850 | 0.1045 | 0.1013 |
+| 60–90 | 0.2302 | 0.2329 | 0.2414 |
+| 90–120 | 0.0585 | 0.1453 | 0.0791 |
+| 120–200 | 0.0373 | 0.0924 | 0.0385 |
+| 200–800 | 1.2354 | 1.3704 | 1.2644 |
+| 800–1600 | 0.4662 | 0.6579 | 0.4531 |
+| 1600–3000 | 0.3097 | 0.3155 | 0.3158 |
+| **Total** | **3.2317** | **3.9219** | **3.1994** |
+
+The Sandia backend agrees with the simulation to within 1% total and gives
+good band-by-band agreement. The Geant4 backend has systematic excess in:
+- 8–18 keV: +0.165 (L X-ray overproduction, see G4EMLOW L2 anomaly)
+- 90–120 keV: +0.087 (U K X-rays from cascade ICC)
+- 120–200 keV: +0.055 (U-234 rotational-band cascade gammas)
+- 800–1600 keV: +0.192 (U-234 high-excitation cascade gammas)
+
+### Root cause: U-234 cascade through intermediate isomers
+
+The Geant4 backend's excess in 120–200 keV and 800–1600 keV (and residual
+90–120 keV U K X-rays) traces to a structural limitation in `getCascade()`:
+
+When Pa-234 β⁻ decays to U-234 at an excited level (e.g. level 11 at 947 keV,
+or level 60 at 1552 keV via U-234 M=3 IT), the photon-evaporation cascade
+fires from that level and walks all the way to ground state. It passes through
+intermediate isomers — notably U-234 M=2 (1421 keV, T½=33.5 μs) and U-234 M=1
+(989 keV, T_mean=1.096 ns from ENSDFSTATE) — **without stopping**. This
+produces:
+- Extra cascade gammas at 131, 228, 295, 461, 570, 734, 883, 926, 945 keV
+  (rotational band transitions and cascades through the 989 keV level)
+- Extra U K-shell IC vacancies from transitions in the 152–244 keV range that
+  are above the K-edge (115.6 keV) and have non-trivial ICC in the data
+
+In the Geant4 simulation, `G4PhotonEvaporation` stops the cascade when it
+encounters a metastable level recognized by ENSDFSTATE (T_mean > ~1 ns).
+U-234 M=2 (1421 keV, 33.5 μs) is recognized and the cascade stops there;
+Geant4 creates U-234 M=2 as a separate radioactive ion that then IT-decays
+via its own cascade. U-234 M=1 (989 keV, 1.096 ns) is also recognized and
+the cascade stops there; since U-234 M=1 has no RadioactiveDecay data, the
+ion is treated as stable and no further gammas are produced.
+
+Our analytic `getCascade()` does not check ENSDFSTATE for intermediate isomers,
+so it misses both stops. The full cascade from 1552 keV → ground state runs
+as one continuous walk, producing all the intermediate gammas.
+
+**Correct fix (not yet implemented)**: In `getCascade()`, use the ENSDFSTATE
+data (already available via `fEnsdf`) to identify intermediate isomers and
+stop propagation there. The probability accumulated at each stop level
+represents activity flowing to that isomer, and its cascade should be added
+separately (either by adding the isomer to the chain or by recursively calling
+`getCascade()` on the stop level).
+
+**Workaround**: For U-238 chain calculations where X-ray precision in the
+90–200 keV range matters, use the **Sandia backend** — it uses ENSDF-tabulated
+photon intensities and agrees with the simulation to within 1% total without
+any cascade computation.
+
+### Sandia backend as reference for U-238
+
+The Sandia backend (`DataSource.Sandia`) is now recommended for U-238 secular
+equilibrium calculations where total gamma count accuracy is important. It
+avoids the photon evaporation cascade entirely, using per-decay aggregated
+photon intensities from the SandiaDecay XML (derived from ENSDF+LBNL ToRI).
+The Geant4 backend remains useful for nuclides where the photon evaporation
+cascade data is accurate (e.g. Cs-137, Co-60, Bi-214 peaks — all within ±2%
+of simulation), and is the only option when you need to match the specific
+G4PhotonEvaporation level scheme exactly.

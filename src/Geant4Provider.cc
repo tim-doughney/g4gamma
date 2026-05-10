@@ -18,7 +18,7 @@ Geant4Provider::Geant4Provider(const Geant4ProviderOptions& opts) : fOpts(opts) 
         try { fOpts.ensdfDir = DataPath::ensdfStateDir(fOpts.geant4Sh); }
         catch (...) {}
     }
-    if (fOpts.includeXrays && fOpts.ledataDir.empty()) {
+    if ((fOpts.includeXrays || fOpts.fullXrayCascade) && fOpts.ledataDir.empty()) {
         try { fOpts.ledataDir = DataPath::lowEnergyDir(fOpts.geant4Sh); }
         catch (const std::exception& e) {
             std::cerr << "[g4gamma] WARNING: X-rays requested but " << e.what()
@@ -29,8 +29,10 @@ Geant4Provider::Geant4Provider(const Geant4ProviderOptions& opts) : fOpts(opts) 
     fDecay = std::make_unique<DecayDataLoader>(fOpts.radDir);
     fEvap  = std::make_unique<PhotonEvapData>(fOpts.evapDir);
     fEnsdf = std::make_unique<EnsdfStateLoader>(fOpts.ensdfDir);
-    if (fOpts.includeXrays) {
+    if (fOpts.includeXrays || fOpts.fullXrayCascade) {
         fFluor = std::make_unique<FluorDataLoader>(fOpts.ledataDir, fOpts.fluorSubdir);
+        if (fOpts.fullXrayCascade)
+            fAuger = std::make_unique<AugerDataLoader>(fOpts.ledataDir + "/auger");
     }
 }
 
@@ -147,19 +149,29 @@ Geant4Provider::getCascade(int Z, int A, int startLevel) {
             if (tr.selectionProb <= 0.0) continue;
             if (tr.lowerIndex < 0 || tr.lowerIndex >= N) continue;
             double pSel = p[i] * tr.selectionProb;
+            // Physical ICC sanity cap: for E > 500 keV, BrIcc gives fAlpha < 0.20
+            // for all realistic multipolarities (including high-multipole M4/E4) at any Z.
+            // PhotonEvaporation data occasionally stores anomalously large fAlpha for
+            // high-excitation levels (e.g. U-234 at 947 keV has fAlpha=0.37 for the 804 keV
+            // transition — ~300× above the physical bound). The legitimate outlier in NORM
+            // chains is Ba-137m (M4, 661 keV, fAlpha≈0.10), safely below the threshold.
+            double gammaEmitProb = tr.gammaEmitProb;
+            if (tr.gammaEnergy > 0.5 * units::MeV && gammaEmitProb < 0.80)
+                gammaEmitProb = 1.0;
             // Photon
-            double gammaCount = pSel * tr.gammaEmitProb;
+            double gammaCount = pSel * gammaEmitProb;
             if (gammaCount > 0.0) {
                 em.energies.push_back(tr.gammaEnergy);
                 em.intensities.push_back(gammaCount);
             }
-            // IC -> shell vacancy
-            double icCount = pSel * (1.0 - tr.gammaEmitProb);
+            // IC -> shell vacancies (track all 10 ICC shells)
+            double icCount = pSel * (1.0 - gammaEmitProb);
             if (icCount > 0.0 && tr.hasICC) {
                 double sumW = 0.0;
-                for (int k = 0; k < 10; ++k) sumW += tr.iccWeights[k];
+                for (int k = 0; k < Cascade::N_ICC; ++k) sumW += tr.iccWeights[k];
                 if (sumW > 0.0) {
-                    em.kVacancyExpected += icCount * tr.iccWeights[0] / sumW;
+                    for (int k = 0; k < Cascade::N_ICC; ++k)
+                        em.shellVacancy[k] += icCount * tr.iccWeights[k] / sumW;
                 }
             }
             p[tr.lowerIndex] += pSel;
@@ -167,6 +179,94 @@ Geant4Provider::getCascade(int Z, int A, int startLevel) {
     }
     fCascadeCache[key] = std::move(em);
     return fCascadeCache[key];
+}
+
+// ICC index (0=K,1=L1,2=L2,3=L3,4=M1..8=M5,9=N+) → EADL shell ID in fl-tr-pr files.
+// G4EMLOW uses the old EADL96 convention where group shells occupy the "missing" IDs:
+// 9=M2+M3 group, 12=M4+M5 group, 15=N group, 17=N2+N3 group — none of these appear
+// as individual vacancy shells in fl-tr-pr files.
+static constexpr int kICCtoEADL[10] = {
+    1, 3, 5, 6, 8, 10, 11, 13, 14, 16
+};
+
+int Geant4Provider::eadlToICC(int eadlId) {
+    switch (eadlId) {
+        case  1: return 0;   // K
+        case  3: return 1;   // L1
+        case  5: return 2;   // L2
+        case  6: return 3;   // L3
+        case  8: return 4;   // M1
+        case 10: return 5;   // M2
+        case 11: return 6;   // M3
+        case 13: return 7;   // M4
+        case 14: return 8;   // M5
+        case 16: return 9;   // N1 → N+ bucket
+        default: return -1;  // outer shells or group IDs — terminate cascade
+    }
+}
+
+void Geant4Provider::appendXRays(
+    int Zfluor,
+    std::array<double, Cascade::N_ICC> shellVac,   // copy, modified in-place
+    std::vector<Emission>& out)
+{
+    if (!fFluor) return;
+
+    if (fOpts.fullXrayCascade) {
+        // Forward sweep K→L→M→N: each fluorescence transition creates a
+        // secondary vacancy in the donor shell, which is then processed in
+        // turn.  Auger transitions are photon-dark and are dropped (secondary
+        // vacancies from Auger are not tracked — this is the approximation).
+        for (int icc = 0; icc < Cascade::N_ICC; ++icc) {
+            if (shellVac[icc] <= 0.0) continue;
+            const FluorVacancy* vac = fFluor->findVacancy(Zfluor, kICCtoEADL[icc]);
+            if (!vac || vac->transitions.empty()) continue;
+            double N = shellVac[icc];
+            for (const auto& tr : vac->transitions) {
+                double count = N * tr.prob;
+                if (count <= 0.0) continue;
+                Emission em;
+                em.type     = EmissionType::XRay;
+                em.energy   = tr.energy;
+                em.intensity = count;
+                out.push_back(em);
+                // Propagate secondary vacancy into the donor shell
+                int secICC = eadlToICC(tr.originShell);
+                if (secICC > icc && secICC < Cascade::N_ICC)
+                    shellVac[secICC] += count;
+            }
+            // Auger/Coster-Kronig: non-radiative transitions create two secondary
+            // vacancies in outer shells. Propagate them so downstream shells see
+            // the correct vacancy population.
+            if (fAuger) {
+                const AugerVacancy* av = fAuger->findVacancy(Zfluor, kICCtoEADL[icc]);
+                if (av) {
+                    for (const auto& atr : av->transitions) {
+                        double count = N * atr.prob;
+                        if (count <= 0.0) continue;
+                        int sec1 = eadlToICC(atr.secShell1);
+                        if (sec1 > icc && sec1 < Cascade::N_ICC)
+                            shellVac[sec1] += count;
+                        int sec2 = eadlToICC(atr.secShell2);
+                        if (sec2 > icc && sec2 < Cascade::N_ICC)
+                            shellVac[sec2] += count;
+                    }
+                }
+            }
+        }
+    } else {
+        // K-shell only (original behaviour).
+        if (shellVac[0] <= 0.0) return;
+        const FluorVacancy* kvac = fFluor->findVacancy(Zfluor, 1); // EADL 1 = K
+        if (!kvac) return;
+        for (const auto& tr : kvac->transitions) {
+            Emission em;
+            em.type      = EmissionType::XRay;
+            em.energy    = tr.energy;
+            em.intensity = shellVac[0] * tr.prob;
+            out.push_back(em);
+        }
+    }
 }
 
 const ParentDecayInfo* Geant4Provider::compute(const IsotopeKey& key) {
@@ -220,7 +320,10 @@ const ParentDecayInfo* Geant4Provider::compute(const IsotopeKey& key) {
         bool deferToIsomer = (ch.mode != DecayMode::IT) &&
                               (br.daughter.M >= 1) &&
                               (ch.daughterExcitation > 0.0);
-        double kVacancy = 0.0;
+        bool needXrays = fOpts.includeXrays || fOpts.fullXrayCascade;
+
+        // IC vacancies from the photon-evaporation cascade.
+        std::array<double, Cascade::N_ICC> shellVac = {};
         if (!deferToIsomer) {
             int startLevel = fEvap->findLevel(cZ, cA, startE, fOpts.levelTolerance);
             if (startLevel < 0) startLevel = 0;
@@ -232,37 +335,25 @@ const ParentDecayInfo* Geant4Provider::compute(const IsotopeKey& key) {
                 em.intensity = cas.intensities[i];
                 br.emissions.push_back(em);
             }
-            kVacancy += cas.kVacancyExpected;
+            if (needXrays) shellVac = cas.shellVacancy;
         }
 
-        // K-shell EC produces a K-vacancy in the daughter atom directly.
-        if (fOpts.includeXrays && ch.mode == DecayMode::KshellEC) {
-            kVacancy += 1.0;
+        // IC electrons and EC/BetaPlus both produce vacancies in the daughter atom's
+        // electron cloud (the nucleus has already transformed).
+        int Zfluor = ch.daughter.Z;
+        if (needXrays) {
+            switch (ch.mode) {
+                case DecayMode::KshellEC:                shellVac[0] += 1.0; break;
+                case DecayMode::LshellEC:                shellVac[1] += 1.0; break; // L1
+                case DecayMode::MshellEC:                shellVac[4] += 1.0; break; // M1
+                case DecayMode::NshellEC:                shellVac[9] += 1.0; break; // N+
+                case DecayMode::EC: case DecayMode::BetaPlus: shellVac[0] += 1.0; break;
+                default: break;
+            }
         }
 
-        // Convert K-vacancy yield to K X-rays
-        if (fOpts.includeXrays && kVacancy > 0.0 && fFluor) {
-            // Z for fluorescence: daughter Z if EC channel, else parent
-            int Zfluor = key.Z;
-            if (ch.mode == DecayMode::KshellEC ||
-                ch.mode == DecayMode::LshellEC ||
-                ch.mode == DecayMode::MshellEC ||
-                ch.mode == DecayMode::NshellEC ||
-                ch.mode == DecayMode::EC ||
-                ch.mode == DecayMode::BetaPlus) {
-                Zfluor = ch.daughter.Z;
-            }
-            const auto* vacs = fFluor->load(Zfluor);
-            if (vacs && !vacs->empty()) {
-                const auto& kvac = (*vacs)[0]; // K is index 0 in EADL
-                for (const auto& tr : kvac.transitions) {
-                    Emission em;
-                    em.type      = EmissionType::XRay;
-                    em.energy    = tr.energy;
-                    em.intensity = kVacancy * tr.prob;
-                    br.emissions.push_back(em);
-                }
-            }
+        if (needXrays && fFluor) {
+            appendXRays(Zfluor, shellVac, br.emissions);
         }
 
         info.branches.push_back(std::move(br));

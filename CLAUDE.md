@@ -25,14 +25,14 @@ CMake produces three targets: `g4gamma_core` (static C++ lib), `g4gamma` (pybind
 ## Running tests
 
 ```bash
-# Unit tests (synthetic data, 21 cases)
+# Unit tests (synthetic data, 27 cases)
 python ../test/run_tests.py          # from inside build/
 PYTHONPATH=build python test/run_tests.py  # from repo root
 
 # Validate against rdecay01 Geant4 Monte Carlo (requires a CSV run):
 #   1. cd buildG4RadDecayExample && ./rdecay01 moduleTest.mac  (1e7 events ~10 min; adjust /run/beamOn)
 #   2. python test/validate_against_geant4.py \
-#          buildG4RadDecayExample/u238_AFtrue_h1_3.csv 10000000
+#          buildG4RadDecayExample/u238_AFtrue_1e7_h1_3.csv 10000000
 ```
 
 `test/diagnose.py` is a runtime diagnostic that prints env vars, resolved data directories, chain construction, and spectrum output — run it first when debugging data-path or zero-output issues.
@@ -126,8 +126,12 @@ res = builder.build(g.IsotopeKey(92, 238, 0), -1, edges)
 | rdecay01 / PhysicsList setting | g4gamma equivalent |
 |---|---|
 | `thresholdForVeryLongDecayTime 1e60 year` | `t = -1` (secular equilibrium) |
-| `radioactiveDecay->SetARM(true)` + `G4UAtomicDeexcitation` | `include_xrays = True` |
-| `SetAugerCascade(true)`, `SetDeexcitationIgnoreCut(true)` | K-shell only in g4gamma (L/M not modelled) |
+| `radioactiveDecay->SetARM(true)` + `G4UAtomicDeexcitation` | `full_xray_cascade = True` (K→L→M cascade) |
+| `SetAugerCascade(true)`, `SetDeexcitationIgnoreCut(true)` | `full_xray_cascade = True` (Auger/CK secondary vacancies propagated) |
 | Beta+ produces 511 keV annihilation pairs | `include_annihilation = True` |
 
-The simulation produces the **full Auger cascade** (K+L+M shells). g4gamma only models K-shell X-rays. Expect g4gamma to underpredict the 50–90 keV region for heavy chain members (Pb, Bi, Po) where L-shell X-rays at ~10–15 keV and M-shell at ~3–5 keV are below detection anyway, but K-shell Pb Kα (~75 keV) and Kβ (~85 keV) are well within NaI/LaBr3 range.
+Setting `full_xray_cascade=True` propagates both fluorescence (fl-tr-pr-Z.dat) and Auger/Coster-Kronig (au-tr-pr-Z.dat) secondary vacancies through K→L→M→N shells, reproducing `SetARM(true)` + `SetAugerCascade(true)`. IC electrons are attributed to the **daughter** atom's electron cloud (`Zfluor = ch.daughter.Z`) in all decay modes. `include_xrays=True` gives K-shell fluorescence only, no Auger cascade. L X-rays (10–16 keV for Pb/Bi) are below NaI/LaBr3 threshold but included for HPGe comparisons.
+
+## Known Geant4 backend limitation for U-238
+
+`getCascade()` does not stop at intermediate isomers in the photon-evaporation level scheme. For U-238 SE, Geant4's simulation stops the cascade at U-234 M=2 (1421 keV) and M=1 (989 keV); the analytic cascades straight through, producing +0.05 excess in 120–200 keV and +0.19 in 800–1600 keV. Per-peak agreement for observable gammas (> 200 keV) is within ±2%. **For U-238 total-count work, prefer `DataSource.Sandia`** — it agrees with rdecay01 to within 1% total. A sanity cap in `getCascade()` suppresses ICC for transitions with E > 500 keV and fAlpha > 0.25 (fixing anomalous PhotonEvaporation data entries).
