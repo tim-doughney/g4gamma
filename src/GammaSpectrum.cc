@@ -71,7 +71,8 @@ SpectrumResult GammaSpectrumBuilder::build(const IsotopeKey& primary,
     }
 
     ChainBuilder cb(*fProvider);
-    cb.build(primary, fOpts.maxChainDepth);
+    cb.build(primary, fOpts.maxChainDepth,
+             fOpts.chainCutoffs, fOpts.chainDepthLimit);
     const auto& chain = cb.nodes();
 
     if (fOpts.verbose >= 1) {
@@ -81,6 +82,7 @@ SpectrumResult GammaSpectrumBuilder::build(const IsotopeKey& primary,
             std::cerr << "  [" << i << "] " << n.isotope.str()
                       << " meanLife=" << n.meanLife / units::s << " s"
                       << " stable=" << n.stable
+                      << " cutoff=" << n.cutoff
                       << " edges=" << n.edges.size() << "\n";
         }
     }
@@ -106,6 +108,7 @@ SpectrumResult GammaSpectrumBuilder::build(const IsotopeKey& primary,
         cc.isotope    = node.isotope;
         cc.activity   = A[i];
         cc.meanLife   = node.meanLife;
+        cc.cutoff     = node.cutoff;
         cc.gammaYield = 0.0;
         if (node.stable || A[i] <= 0.0) {
             out.contributions.push_back(cc);

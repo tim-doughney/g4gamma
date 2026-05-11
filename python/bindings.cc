@@ -79,10 +79,14 @@ PYBIND11_MODULE(g4gamma, m) {
         .def_readonly("activity",    &ChainContribution::activity)
         .def_readonly("gamma_yield", &ChainContribution::gammaYield)
         .def_readonly("mean_life",   &ChainContribution::meanLife)
+        .def_readonly("cutoff",      &ChainContribution::cutoff,
+            "True if the chain was truncated at this isotope "
+            "(it is included but its daughters are not).")
         .def("__repr__", [](const ChainContribution& c){
             return "ChainContribution(" + c.isotope.str() +
                    ", A=" + std::to_string(c.activity) +
-                   ", gammasPerDecay=" + std::to_string(c.gammaYield) + ")";
+                   ", gammasPerDecay=" + std::to_string(c.gammaYield) +
+                   (c.cutoff ? ", cutoff=True" : "") + ")";
         });
 
     // ---- SpectrumResult --------------------------------------------------
@@ -116,7 +120,17 @@ PYBIND11_MODULE(g4gamma, m) {
         .def_readwrite("sandia_xml",             &SpectrumOptions::sandiaXml)
         .def_readwrite("lara_dir",               &SpectrumOptions::laraDir)
         .def_readwrite("level_match_tolerance",  &SpectrumOptions::levelMatchTolerance)
-        .def_readwrite("verbose",                &SpectrumOptions::verbose);
+        .def_readwrite("verbose",                &SpectrumOptions::verbose)
+        // Chain truncation --------------------------------------------------
+        .def_readwrite("chain_cutoffs", &SpectrumOptions::chainCutoffs,
+            "List of IsotopeKey at which to stop following the chain. "
+            "Each listed isotope IS included (activity + own decay gammas) "
+            "but its daughters are not. "
+            "Example: opts.chain_cutoffs = [g.IsotopeKey(86, 222, 0)]  # stop at Rn-222")
+        .def_readwrite("chain_depth_limit", &SpectrumOptions::chainDepthLimit,
+            "Maximum decay generations below the root to include. "
+            "-1 = unlimited (default); 0 = root only; 1 = root + daughters; etc. "
+            "Composes with chain_cutoffs: whichever condition is hit first truncates.");
 
     // ---- GammaSpectrumBuilder --------------------------------------------
     py::class_<GammaSpectrumBuilder>(m, "GammaSpectrumBuilder")

@@ -89,6 +89,25 @@ To add a new data source: implement `IDecayProvider` (3–4 methods) and add the
 
 `GammaSpectrumBuilder::build()` iterates chain nodes, multiplies emissions by activity (from Bateman), and accumulates into the user-supplied bin grid. Provider-specific flags (`emissionsArePerDecay`, `emissionsIncludeXrays`, `emissionsIncludeAnnihilation`) control whether the binner adds 511 keV pairs or X-rays itself.
 
+## Chain truncation
+
+`SpectrumOptions` exposes two independent truncation controls that compose (whichever condition is reached first stops expansion):
+
+| Option | Type | Default | Behaviour |
+|--------|------|---------|-----------|
+| `chainCutoffs` | `vector<IsotopeKey>` | `[]` | Stop at listed isotopes |
+| `chainDepthLimit` | `int` | `-1` | Max decay generations from root; `-1` = unlimited |
+
+**Semantics of a cutoff node:** The isotope at the truncation boundary IS included as a full chain member — its Bateman activity is computed and its own decay-branch emissions (gammas/xrays) are counted. Its daughters are NOT added to the chain. This is physically correct for modelling partial chain separation (e.g. radon emanation from soil):
+
+- Ra-226 → Rn-222: the prompt nuclear de-excitation gammas from Ra-226's decay are part of Ra-226's emission data — they are always counted regardless of truncation.
+- Rn-222 itself is a chain member with activity ≈ Ra-226 (secular equilibrium). Its own alpha-decay gammas (≈0.0008 γ/decay in the Sandia database) are also counted.
+- Po-218 and all subsequent progeny are absent from the chain.
+
+`ChainContribution.cutoff` (Python: `c.cutoff`) is `True` for any node that was a truncation boundary.
+
+**`ChainNode.cutoff`** is the internal flag propagated to the output.
+
 ## Internal units
 
 All internal quantities use Geant4/CLHEP conventions: **energy in MeV**, **time in ns**. The `units` submodule (`include/g4gamma/Units.hh`, exposed as `g4gamma.units` in Python) provides conversion factors (`keV`, `s`, `year`, etc.).
@@ -124,6 +143,15 @@ opts = g.SpectrumOptions()
 opts.source = g.DataSource.Sandia
 builder = g.GammaSpectrumBuilder(opts)
 res = builder.build(g.IsotopeKey(92, 238, 0), -1, edges)
+
+# Chain truncation — radon escape (U-238 chain, stop at Rn-222):
+opts.chain_cutoffs = [g.IsotopeKey(86, 222, 0)]   # Rn-222 included, Po-218+ excluded
+res = builder.build(g.IsotopeKey(92, 238, 0), -1, edges)
+# cutoff nodes visible: any(c.cutoff for c in res.contributions)
+
+# Chain truncation — depth limit (root + N generations):
+opts2 = g.SpectrumOptions()
+opts2.chain_depth_limit = 3    # U238 → Th234 → Pa234m → [U234,Pa234 cutoff]
 ```
 
 ## C++ CLI

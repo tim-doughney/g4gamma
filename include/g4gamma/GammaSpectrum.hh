@@ -29,10 +29,27 @@ struct SpectrumOptions {
     bool   includeAnnihilation = true;
     bool   includeXrays        = false; // K-shell X-rays (Geant4 backend) / pass-through (Sandia/LARA)
     bool   fullXrayCascade     = false; // Geant4 backend: K→L→M fluorescence cascade; implies includeXrays
-    int    maxChainDepth       = 50;
+    int    maxChainDepth       = 50;    // safety limit on chain BFS; not a physics limit
     double isomerLifetimeThresh = 1.0 * units::ns;
     double levelMatchTolerance  = 1.0 * units::keV;
     int    verbose             = 0;
+
+    // Chain truncation -------------------------------------------------------
+    // chainCutoffs: isotopes at which to stop following the chain. The listed
+    // isotope IS included as a chain member (its activity and its own decay
+    // emissions are counted) but its daughters are NOT added. Useful for
+    // modelling radon escape: set cutoffs={Rn-222} and the chain includes
+    // Ra-226 → Rn-222 (Rn-222 emits its own decay gammas) but stops before
+    // Po-218 and subsequent progeny. The prompt nuclear gammas from
+    // Ra-226 → Rn-222 are part of Ra-226's emission data and are always
+    // included regardless of chain truncation.
+    std::vector<IsotopeKey> chainCutoffs;
+
+    // chainDepthLimit: maximum number of decay generations below the root to
+    // include. 0 = root only; 1 = root + direct daughters; -1 = unlimited
+    // (default). chainCutoffs and chainDepthLimit compose: whichever condition
+    // is satisfied first stops expansion at that node.
+    int chainDepthLimit = -1;
 
     std::string geant4Sh;
     std::string sandiaXml;
@@ -44,6 +61,7 @@ struct ChainContribution {
     double     activity;
     double     gammaYield;
     double     meanLife;
+    bool       cutoff = false;  // chain was truncated at this isotope
 };
 
 struct SpectrumResult {
