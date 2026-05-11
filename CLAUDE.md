@@ -20,7 +20,15 @@ cmake ..
 make -j
 ```
 
-CMake produces three targets: `g4gamma_core` (static C++ lib), `g4gamma` (pybind11 `.so` module), and `g4gamma_cli` (C++ CLI binary).
+CMake produces four targets: `g4gamma_core` (static C++ lib), `g4gamma` (pybind11 `.so` module), `g4gamma_cli` (C++ CLI binary), and `sandia_compare` (Bateman solver validation binary, requires the SandiaDecay submodule).
+
+The SandiaDecay submodule lives in `third_party/SandiaDecay`. If you clone fresh:
+
+```bash
+git submodule update --init
+```
+
+Then rebuild — CMake will detect the submodule and enable `sandia_compare` automatically. If the submodule is absent, CMake prints a notice and skips the target.
 
 ## Running tests
 
@@ -35,6 +43,11 @@ python test/validate_against_geant4.py buildG4RadDecayExample/u238_AFtrue_h1_3.c
 python test/validate_against_geant4.py buildG4RadDecayExample/th232_AFtrue_1e7_h1_3.csv 10000000
 # The script auto-detects the isotope from the CSV filename (e.g. u238, th232).
 # For your own run: adjust n_primaries to match /run/beamOn in your macro
+
+# Validate Bateman solver against SandiaDecay's independent implementation:
+python test/validate_against_sandiadecay.py   # from repo root
+# Or run the C++ binary directly:
+./build/sandia_compare --xml data/sandia/sandia.decay.nocoinc.min.xml --out results.csv
 ```
 
 `test/diagnose.py` is a runtime diagnostic that prints env vars, resolved data directories, chain construction, and spectrum output — run it first when debugging data-path or zero-output issues.
@@ -128,6 +141,40 @@ res = builder.build(g.IsotopeKey(92, 238, 0), -1, edges)
 **Th-232 chain intermediates** (Ra-224, Rn-220, Po-216, Po-212) are now included. Ra-224 and Po-212 have LNHB data files; Rn-220 and Po-216 are pure-alpha emitters with chain-structure-only entries. These nuclides are required to connect Pb-212/Bi-212/Tl-208 to the rest of the Th-232 chain.
 
 **Newer LARA file format (NIST 2025+):** Some files (e.g. Pb-212) use a cascade format with a 9th "Parent" column and embed gammas from all daughter nuclides in one file. `LaraProvider` detects this (by checking the Parent column) and skips daughter-nuclide emissions — they are counted separately when each daughter's own file is loaded. Without this guard, cascade-format files would double-count all daughter gammas.
+
+## SandiaDecay Bateman solver validation
+
+`third_party/SandiaDecay` is a git submodule pointing to the Sandia National
+Laboratories SandiaDecay library (https://github.com/sandialabs/SandiaDecay).
+It is included exclusively for independent verification of our analytic Bateman
+solver — not as a data source (we already have `SandiaProvider` which reads
+the same `sandia.decay.xml` format).
+
+**What is validated:** `test/sandia_compare.cc` builds a `sandia_compare` binary
+that runs both solvers on the same XML file and compares per-nuclide activities
+at multiple time points. The two implementations agree to **machine precision
+(< 0.001%)** across all test cases.
+
+**ANSTO Opal reactor test suite** (8 isotopes, 63 comparisons):
+
+| Isotope | Bateman regime | ANSTO relevance |
+|---------|---------------|-----------------|
+| Mo-99 | secular-eq (T½ 65.9 h >> Tc-99m 6.0 h) | Primary SPECT generator product |
+| I-131 | minor isomeric branch Xe-131m (1.17%, T½ 11.93 d) | Fission product / thyroid therapy |
+| Lu-177 | simple chain (Hf-177 stable) | TRT cancer therapy production |
+| Ge-68 | rapid secular-eq (T½ 271 d >> Ga-68 67.7 min) | PET generator production |
+| Na-24 | simple exponential (Mg-24 stable) | Reactor activation product |
+| Co-60 | simple chain (Ni-60 stable) | Structural activation product |
+| Sr-90 | secular-eq (T½ 28.8 yr >> Y-90 64.0 h) | Fission product / Y-90 microsphere therapy |
+| Cs-137 | rapid secular-eq (T½ 30 yr >> Ba-137m 2.55 min) | Fission product / calibration source |
+
+These cover the three classical Bateman regimes:
+1. **Secular equilibrium** — parent T½ much longer than daughter T½; daughter activity → parent activity
+2. **Transient equilibrium / no-equilibrium** — parent shorter than or comparable to daughter
+3. **Isomeric branching** — only a fraction of parent decays populate a longer-lived isomeric daughter
+
+**Literature references:** Bateman (1910) *Proc. Cambridge Phil. Soc.* 15:423;
+Cetnar (2006) *Ann. Nucl. Energy* 33:640.
 
 ## rdecay01 settings → g4gamma options mapping
 

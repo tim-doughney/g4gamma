@@ -1,0 +1,3 @@
+[submodule "third_party/SandiaDecay"]
+	path = third_party/SandiaDecay
+	url = https://github.com/sandialabs/SandiaDecay.git

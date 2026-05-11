@@ -66,3 +66,23 @@ add_executable(g4gamma_cli src/cli.cc)
 target_link_libraries(g4gamma_cli PRIVATE g4gamma_core)
 
 install(TARGETS g4gamma DESTINATION .)
+
+# ---------------------------------------------------------------------------
+# SandiaDecay comparison test (requires third_party/SandiaDecay submodule)
+# Run: git submodule update --init  then rebuild.
+# ---------------------------------------------------------------------------
+option(BUILD_SANDIA_COMPARE "Build sandia_compare Bateman validation binary" ON)
+if(BUILD_SANDIA_COMPARE)
+    set(SANDIA_DECAY_DIR "${CMAKE_CURRENT_SOURCE_DIR}/third_party/SandiaDecay")
+    if(EXISTS "${SANDIA_DECAY_DIR}/SandiaDecay.h")
+        add_subdirectory(${SANDIA_DECAY_DIR})
+        add_executable(sandia_compare test/sandia_compare.cc)
+        target_link_libraries(sandia_compare PRIVATE g4gamma_core SandiaDecay)
+        target_include_directories(sandia_compare PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/include
+            ${SANDIA_DECAY_DIR})
+        message(STATUS "sandia_compare: enabled (SandiaDecay submodule found)")
+    else()
+        message(STATUS "sandia_compare: disabled (run: git submodule update --init)")
+    endif()
+endif()
