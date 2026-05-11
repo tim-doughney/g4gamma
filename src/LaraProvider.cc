@@ -151,9 +151,11 @@ IsotopeKey LaraProvider::symbolToKey(const std::string& sym) {
         char marker = s.back();
         s.pop_back();
         if (!s.empty() && std::isdigit(static_cast<unsigned char>(s.back()))) {
-            s.push_back(marker);
+            // trailing 'm'/'n' follows a mass-number digit → isomeric state
+            M = (marker == 'm') ? 1 : 1;
         } else {
-            M = 1;
+            // trailing 'm' is part of the element symbol (e.g. "Am") → restore
+            s.push_back(marker);
         }
     }
     size_t dash = s.find('-');

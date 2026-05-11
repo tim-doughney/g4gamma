@@ -334,6 +334,32 @@ void SandiaProvider::parseFile(const std::string& path) {
             findEmissions(T.gamma, EmissionType::Gamma);
             findEmissions(T.xray,  EmissionType::XRay);
 
+            // Sandia XML labels EC/β+ mixed transitions as mode="ec" and stores
+            // the β+ component as <positron> elements.  Read them and add the
+            // two 511 keV annihilation photons explicitly so the binner doesn't
+            // need to infer β+ from the mode string.
+            {
+                double betaPlusIntensity = 0.0;
+                size_t pp = 0;
+                const std::string positronTag = "<positron";
+                while ((pp = body.find(positronTag, pp)) != std::string::npos) {
+                    size_t e = body.find('>', pp);
+                    if (e == std::string::npos) break;
+                    std::string tag = body.substr(pp, e - pp + 1);
+                    double I = AttrParser::getDouble(tag, "intensity", 0.0);
+                    if (I == 0.0) I = AttrParser::getDouble(tag, "i", 0.0);
+                    betaPlusIntensity += I;
+                    pp = e + 1;
+                }
+                if (betaPlusIntensity > 0.0) {
+                    Emission em;
+                    em.type      = EmissionType::AnnihilationPair;
+                    em.energy    = units::electron_mass_c2;
+                    em.intensity = 2.0 * betaPlusIntensity;
+                    branch.emissions.push_back(em);
+                }
+            }
+
             // Resolve parent/daughter symbols
             auto pIt = fSymbolToKey.find(parent);
             auto cIt = fSymbolToKey.find(child);
