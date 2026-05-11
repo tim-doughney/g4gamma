@@ -208,8 +208,8 @@ def fig_time_evolution(iso_label, Z, A, M,
     # Colour-code time snapshots
     t_colors = plt.cm.viridis(np.linspace(0.1, 0.9, n_t))
 
-    fig = plt.figure(figsize=(12, 2.5 * n_t + 2))
-    gs  = fig.add_gridspec(n_t + 1, n_b, hspace=0.45, wspace=0.35,
+    fig = plt.figure(figsize=(12, 2.1 * n_t + 1.5))
+    gs  = fig.add_gridspec(n_t + 1, n_b, hspace=0.35, wspace=0.35,
                            height_ratios=[1.0] * n_t + [0.8])
 
     # ── spectra panels ──────────────────────────────────────────────────────
@@ -265,7 +265,8 @@ def fig_time_evolution(iso_label, Z, A, M,
 
     fig.suptitle(fr"$^{{{A}}}${iso_label.split('-')[0]} time-dependent spectrum"
                  + (f" – {title_suffix}" if title_suffix else ""),
-                 fontsize=10, y=1.01)
+                 fontsize=10)
+    fig.subplots_adjust(top=0.93)
 
     fname = f"fig_{iso_label.lower().replace('-','')}_timedep.pdf"
     plt.savefig(OUTDIR / fname, bbox_inches="tight")
