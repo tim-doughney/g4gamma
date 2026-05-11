@@ -33,13 +33,18 @@ You choose the source via `SpectrumOptions.source`:
   computation needed). Auto-resolves to bundled
   `data/sandia/sandia.decay.nocoinc.min.xml` if available.
 
-Both backends produce identical answers to within 1% for the principal
-peaks of all NORM-relevant nuclides — see `test/showcase.py`'s
-`11_geant4_vs_sandia*.png` plots for cross-validation.
+- **`g.DataSource.Lara`** — reads LARA/DDEP evaluated data files from
+  `data/lara/` (48 nuclides covering the full U-238 and Th-232 chains).
+  Emissions are per-decay and include measured X-rays. Run
+  `data/lara/fetch_lara.sh` to re-download or update. Activate with
+  `opts.source = g.DataSource.Lara`.
+
+All three backends agree to within 1–2% for the principal peaks of
+NORM-relevant nuclides — see `test/showcase.py` for cross-validation.
 
 The provider abstraction is open: add a new source by implementing
 `IDecayProvider` (3 methods) and dropping a new `*.cc` into
-`CMakeLists.txt`. LARA/DDEP and ENDF-6 are obvious candidates.
+`CMakeLists.txt`. ENDF-6 is an obvious next candidate.
 
 ## Sources of gammas
 
@@ -160,7 +165,7 @@ which caches data:
 
 ```python
 opts = g.SpectrumOptions()
-opts.source = g.DataSource.Sandia          # or g.DataSource.Geant4
+opts.source = g.DataSource.Sandia          # or g.DataSource.Geant4 / g.DataSource.Lara
 opts.include_xrays = True
 opts.geant4_sh = "/opt/geant4/bin/geant4.sh"  # only needed for Geant4 backend
 opts.sandia_xml = ""                        # auto-resolves; override if needed
@@ -184,7 +189,7 @@ for (Z, A, M) in isotopes:
 
 ## Validation
 
-Reference tests against ENSDF data (`test/run_tests.py` — 27/27 passing):
+Reference tests against ENSDF data (`test/run_tests.py` — 38/38 passing):
 
 | isotope | peak (keV) | reference | g4gamma (Geant4) | g4gamma (Sandia) | g4gamma (LARA) |
 |---------|-----------|-----------|------------------|------------------|-----------------|
@@ -277,9 +282,10 @@ src/                   matching .cc files
 python/bindings.cc     pybind11 module
 data/sandia/           bundled SandiaDecay XML + license + README
 data/lara/             LARA/DDEP data (lara.tar.gz) + fetch script
-test/run_tests.py      self-contained synthetic-data test suite (27 cases)
+test/run_tests.py      self-contained synthetic-data test suite (38 cases)
 test/diagnose.py       runtime diagnostic for path/file/format issues
 test/showcase.py       end-to-end demo with publication-quality plots
-test/validate_against_geant4.py     compare against rdecay01 CSVs
+test/validate_against_geant4.py       compare against rdecay01 CSVs
+test/validate_against_sandiadecay.py  compare Bateman solver vs SandiaDecay library
 TRANSCRIPT.md          development notes & design transcript
 ```
