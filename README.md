@@ -204,19 +204,19 @@ NORM-relevant isotopes — see `showcase_plots/11_geant4_vs_sandia*.png`.
 Validation against rdecay01 simulation (secular equilibrium,
 `SetARM(true)` + `SetAugerCascade(true)` + `SetDeexcitationIgnoreCut(true)`):
 
-**U-238** (10,000-event run):
+**U-238** (10,000,000-event run):
 
 | peak (keV) | nuclide | ENSDF ref | simulation | g4gamma (Geant4) | err (G4) |
 |-----------|---------|-----------|-----------|-----------------|----------|
-| 75.5 | Bi K X-ray | 0.0930 | 0.0544 | 0.0527 | −3.1% vs sim |
-| 92.5 | Th/Rn Kα | 0.0630 | 0.0447 | 0.0437 | −2.2% vs sim |
-| 295.2 | Pb-214 | 0.1840 | 0.1845 | 0.1845 | +0.0% |
-| 351.9 | Pb-214 | 0.3580 | 0.3559 | 0.3583 | +0.7% |
-| 609.3 | Bi-214 | 0.4610 | 0.4628 | 0.4541 | −1.9% |
-| 1764.5 | Bi-214 | 0.1530 | 0.1511 | 0.1527 | +1.1% |
-| 2204.1 | Bi-214 | 0.0491 | 0.0463 | 0.0493 | +6.4% |
+| 75.5 | Bi K X-ray | 0.0930 | 0.0527 | 0.0527 | 0.0% |
+| 92.5 | Th/Rn Kα | 0.0630 | 0.0435 | 0.0437 | +0.5% |
+| 295.2 | Pb-214 | 0.1840 | 0.1847 | 0.1846 | −0.1% |
+| 351.9 | Pb-214 | 0.3580 | 0.3574 | 0.3574 | 0.0% |
+| 609.3 | Bi-214 | 0.4610 | 0.4596 | 0.4543 | −1.4% |
+| 1764.5 | Bi-214 | 0.1530 | 0.1524 | 0.1527 | +0.2% |
+| 2204.1 | Bi-214 | 0.0491 | 0.0493 | 0.0493 | +0.4% |
 
-Total γ/primary: 3.221 (model) vs 3.247 (simulation) = **−0.8%**
+Total γ/primary: 3.223 (model) vs 3.232 (simulation) = **−0.3%**
 
 **Th-232** (1,000,000-event run):
 
@@ -231,13 +231,15 @@ Total γ/primary: 3.221 (model) vs 3.247 (simulation) = **−0.8%**
 
 Total γ/primary: 4.257 (model) vs 4.261 (simulation) = **−0.1%**
 
-All major gamma peaks agree within ±2% of simulation. The 338.3 keV Ac-228
-line (+14%) and 911 keV cluster (+4%) reflect a consistent data difference
-between the Geant4 RadioactiveDecay branching fractions and ENSDF; the simulation
-and model agree with each other, both differ from ENSDF. X-ray peaks at 75–93 keV
-show −3% vs simulation due to the G4EMLOW L2 fluorescence yield anomaly (see
-Known Limitations #2); both model and simulation deviate identically from
-physical ENSDF values in that region.
+All major gamma peaks agree within ±2% of simulation. X-ray peaks at 75–93 keV
+show 0–0.5% vs simulation — model and simulation use the same G4EMLOW data so
+they agree, but both deviate from ENSDF values in this region. The 609.3 keV
+Bi-214 discrepancy (−1.4%) is a known dataset difference in branching fractions.
+
+For Th-232, the 338.3 keV Ac-228 line (+13.9%) and 911 keV cluster (+3.8%)
+reflect a consistent data difference between the Geant4 RadioactiveDecay
+branching fractions and ENSDF; simulation and model agree with each other, both
+differ from ENSDF.
 
 `test/validate_against_geant4.py` auto-detects the isotope from the CSV filename
 and produces per-source overlay plots. To validate against your own rdecay01
