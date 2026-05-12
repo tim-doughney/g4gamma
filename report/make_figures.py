@@ -134,7 +134,8 @@ def fig_u238_g4_vs_mc():
 
     # ratio on bins where MC > small threshold
     mask = mc_cnt > 1e-6
-    ratio = np.where(mask, cnt / mc_cnt, np.nan)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        ratio = np.where(mask, cnt / mc_cnt, np.nan)
     axr.step(cen, ratio, where="mid", color=COLORS["g4_af"])
     axr.axhline(1.0, color="k", linewidth=0.8, linestyle="--")
     axr.axhspan(0.95, 1.05, color="gray", alpha=0.15)
@@ -180,7 +181,8 @@ def fig_th232_g4_vs_mc():
             bbox=dict(boxstyle="round,pad=0.3", fc="white", alpha=0.8))
 
     mask = mc_cnt > 1e-6
-    ratio = np.where(mask, cnt / mc_cnt, np.nan)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        ratio = np.where(mask, cnt / mc_cnt, np.nan)
     axr.step(cen, ratio, where="mid", color=COLORS["g4_af"])
     axr.axhline(1.0, color="k", linewidth=0.8, linestyle="--")
     axr.axhspan(0.95, 1.05, color="gray", alpha=0.15)
